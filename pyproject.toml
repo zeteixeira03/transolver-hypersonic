@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transolver-hypersonic"
+version = "0.0.1"
+description = "Neural surrogate for hypersonic flow around axisymmetric sphere-cone re-entry capsules."
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "Jose Teixeira" }]
+license = { text = "MIT" }
+dependencies = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "torch>=2.2",
+    "einops>=0.7",
+    "tqdm>=4.66",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+phase1 = [
+    "airfrans>=0.1.4",
+    "wandb>=0.16",
+]
+cfd = [
+    "gmsh>=4.12",
+    "vtk>=9.3",
+    "meshio>=5.3",
+]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.4",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "B", "UP"]
+ignore = ["E501"]
