@@ -22,7 +22,7 @@ dependencies = [
 
 [project.optional-dependencies]
 phase1 = [
-    "airfrans>=0.1.4",
+    "airfrans>=0.1.5",
     "wandb>=0.16",
 ]
 cfd = [
