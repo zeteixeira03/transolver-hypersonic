@@ -106,10 +106,22 @@ def train_one_epoch(
         )
 
         if not torch.isfinite(loss):
-            raise FloatingPointError(
-                f"non-finite loss at step {n}: total={float(loss.detach())}; "
-                "training diverged, consider lower lr or disabling amp"
+            name = batch.get("name", "<unknown>")
+            xs = x.detach().float()
+            ys = y.detach().float()
+            ps = pred.detach().float()
+            diag = (
+                f"step={n} sim={name}\n"
+                f"  x: finite={bool(torch.isfinite(xs).all())} "
+                f"min={float(xs.min())} max={float(xs.max())} mean={float(xs.mean())}\n"
+                f"  y: finite={bool(torch.isfinite(ys).all())} "
+                f"min={float(ys.min())} max={float(ys.max())} mean={float(ys.mean())}\n"
+                f"  pred: finite={bool(torch.isfinite(ps).all())} "
+                f"min={float(ps[torch.isfinite(ps)].min()) if torch.isfinite(ps).any() else float('nan')} "
+                f"max={float(ps[torch.isfinite(ps)].max()) if torch.isfinite(ps).any() else float('nan')}\n"
+                f"  loss={float(loss.detach())}"
             )
+            raise FloatingPointError(f"non-finite loss diagnostics:\n{diag}")
 
         if use_amp and scaler is not None:
             scaler.scale(loss).backward()
