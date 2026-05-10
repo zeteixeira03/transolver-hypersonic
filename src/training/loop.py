@@ -31,6 +31,7 @@ class TrainConfig:
     log_every: int = 1
     val_every: int = 10
     amp: bool = True  # mixed-precision on CUDA per CLAUDE.md default
+    grad_clip: float = 1.0  # global L2 grad-norm clip, disables if <= 0
 
 
 # ============================================================================================
@@ -99,14 +100,28 @@ def train_one_epoch(
         optimizer.zero_grad()
         with torch.cuda.amp.autocast(enabled=use_amp):
             pred = model(x, pos=pos)
-            loss, loss_vol, loss_surf = mse_weighted(pred, y, surface, cfg.surface_weight)
+        # loss in fp32 regardless of AMP, MSE on normalized targets is cheap
+        loss, loss_vol, loss_surf = mse_weighted(
+            pred.float(), y.float(), surface, cfg.surface_weight
+        )
+
+        if not torch.isfinite(loss):
+            raise FloatingPointError(
+                f"non-finite loss at step {n}: total={float(loss)}; "
+                "training diverged, consider lower lr or disabling amp"
+            )
 
         if use_amp and scaler is not None:
             scaler.scale(loss).backward()
+            if cfg.grad_clip > 0:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             scaler.step(optimizer)
             scaler.update()
         else:
             loss.backward()
+            if cfg.grad_clip > 0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
             optimizer.step()
 
         sum_total += float(loss.detach())

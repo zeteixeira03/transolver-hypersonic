@@ -117,7 +117,10 @@ class PhysicsAttentionIrregularMesh(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)  # (B, H, N, M)
+        # temperature is learnable but unbounded upstream; clamp magnitude to
+        # avoid division by ~0 producing inf logits under fp16 autocast.
+        temp = self.temperature.abs().clamp_min(0.1)
+        slice_weights = self.softmax(self.in_project_slice(x_mid) / temp)  # (B, H, N, M)
         slice_norm = slice_weights.sum(2)  # (B, H, M), sum over points per slice
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / (slice_norm + 1e-5)[:, :, :, None].repeat(

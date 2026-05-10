@@ -27,14 +27,14 @@ def surface_cp(
     pred_or_true: torch.Tensor,
     surface: torch.Tensor,
     inlet_velocity: torch.Tensor,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> np.ndarray:
     """
     Pressure coefficient on airfoil surface points.
 
     Parameters
     ----------
     pred_or_true : torch.Tensor
-        Per-point target tensor (N, 4) in physical units.
+        Per-point target tensor (N, 4) in physical units. Column 2 is p/rho.
     surface : torch.Tensor
         Boolean mask of shape (N,) marking airfoil surface points.
     inlet_velocity : torch.Tensor
@@ -43,15 +43,13 @@ def surface_cp(
     Returns
     -------
     np.ndarray
-        Surface x-coordinates of length M = surface.sum().
-    np.ndarray
-        Cp values of length M.
+        Cp values of length M = surface.sum().
     """
     if not surface.any():
-        return np.array([]), np.array([])
+        return np.array([])
     p_over_rho = pred_or_true[surface, 2].cpu().numpy()
     u_inf = inlet_velocity[surface].pow(2).sum(dim=-1).sqrt().mean().item()
-    return p_over_rho, p_over_rho / (0.5 * u_inf ** 2)
+    return p_over_rho / (0.5 * u_inf ** 2)
 
 
 # ============================================================================================
@@ -100,10 +98,17 @@ def plot_acceptance(
     else:
         rl2_surf = np.full(4, np.nan)
 
-    # panel 1: surface Cp(x)
-    surface_xy = pos_np[item["surface"].cpu().numpy()]
-    _, cp_true = surface_cp(y_true, surface, inlet.to(device))
-    _, cp_pred = surface_cp(pred, surface, inlet.to(device))
+    # panel 1: surface Cp(x), split by surface-normal y-sign so upper and
+    # lower surface plot as two separate single-valued curves instead of a
+    # zigzag through both. surface normals are in raw arr cols 5..6.
+    surf_mask = item["surface"].cpu().numpy()
+    surface_xy = pos_np[surf_mask]
+    raw = dataset.arrays[sim_index]
+    normal_y = raw[surf_mask, 6]
+    upper = normal_y >= 0
+    lower = ~upper
+    cp_true = surface_cp(y_true, surface, inlet.to(device))
+    cp_pred = surface_cp(pred, surface, inlet.to(device))
 
     # panel 2: |U| field
     u_true = y_true[:, :2].pow(2).sum(dim=-1).sqrt().cpu().numpy()
@@ -112,9 +117,14 @@ def plot_acceptance(
     fig = plt.figure(figsize=(13, 5))
 
     ax1 = fig.add_subplot(1, 2, 1)
-    order = np.argsort(surface_xy[:, 0])
-    ax1.plot(surface_xy[order, 0], cp_true[order], "k-", lw=1.2, label="ground truth")
-    ax1.plot(surface_xy[order, 0], cp_pred[order], "r--", lw=1.0, label="prediction")
+    for mask, lbl_t, lbl_p, style_t, style_p in [
+        (upper, "true upper", "pred upper", "k-", "r--"),
+        (lower, "true lower", "pred lower", "k:", "r-."),
+    ]:
+        if mask.any():
+            order = np.argsort(surface_xy[mask, 0])
+            ax1.plot(surface_xy[mask, 0][order], cp_true[mask][order], style_t, lw=1.2, label=lbl_t)
+            ax1.plot(surface_xy[mask, 0][order], cp_pred[mask][order], style_p, lw=1.0, label=lbl_p)
     ax1.invert_yaxis()
     ax1.set_xlabel("x [m]")
     ax1.set_ylabel("Cp")
