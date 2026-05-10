@@ -107,7 +107,7 @@ def train_one_epoch(
 
         if not torch.isfinite(loss):
             raise FloatingPointError(
-                f"non-finite loss at step {n}: total={float(loss)}; "
+                f"non-finite loss at step {n}: total={float(loss.detach())}; "
                 "training diverged, consider lower lr or disabling amp"
             )
 
