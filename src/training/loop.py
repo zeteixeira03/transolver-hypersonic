@@ -30,6 +30,7 @@ class TrainConfig:
     device: str = "cuda"
     log_every: int = 1
     val_every: int = 10
+    amp: bool = True  # mixed-precision on CUDA per CLAUDE.md default
 
 
 # ============================================================================================
@@ -83,22 +84,30 @@ def train_one_epoch(
     loader: DataLoader,
     optimizer: torch.optim.Optimizer,
     cfg: TrainConfig,
+    scaler: torch.cuda.amp.GradScaler | None = None,
 ) -> dict[str, float]:
     model.train()
     n = 0
     sum_total = sum_vol = sum_surf = 0.0
+    use_amp = cfg.amp and str(cfg.device).startswith("cuda")
     for batch in loader:
         x = batch["x"].to(cfg.device)
         y = batch["y"].to(cfg.device)
         surface = batch["surface"].to(cfg.device)
         pos = batch["pos"].to(cfg.device)
 
-        pred = model(x, pos=pos)
-        loss, loss_vol, loss_surf = mse_weighted(pred, y, surface, cfg.surface_weight)
-
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        with torch.cuda.amp.autocast(enabled=use_amp):
+            pred = model(x, pos=pos)
+            loss, loss_vol, loss_surf = mse_weighted(pred, y, surface, cfg.surface_weight)
+
+        if use_amp and scaler is not None:
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            optimizer.step()
 
         sum_total += float(loss.detach())
         sum_vol += float(loss_vol)
