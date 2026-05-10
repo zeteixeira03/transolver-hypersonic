@@ -95,9 +95,18 @@ def compute_norm_stats(arrays: list[np.ndarray]) -> NormStats:
     var = m2_acc / max(n_total - 1, 1)
     std = np.sqrt(var)
     eps = 1e-8
+    x_mean = mean_acc[INPUT_COLS].copy()
+    x_std = std[INPUT_COLS].copy() + eps
+    # surface normals (cols 5, 6 in the raw arr -> input indices 5, 6) are
+    # zero off-surface and unit on-surface, so their fitted std is tiny and
+    # mean/std normalization blows them up to ~12-15 sigma on the airfoil.
+    # Activations downstream then drift to inf within a few epochs. Leave
+    # them at their native [-1, 1] scale instead.
+    x_mean[5:7] = 0.0
+    x_std[5:7] = 1.0
     return NormStats(
-        x_mean=torch.tensor(mean_acc[INPUT_COLS], dtype=torch.float32),
-        x_std=torch.tensor(std[INPUT_COLS] + eps, dtype=torch.float32),
+        x_mean=torch.tensor(x_mean, dtype=torch.float32),
+        x_std=torch.tensor(x_std, dtype=torch.float32),
         y_mean=torch.tensor(mean_acc[TARGET_COLS], dtype=torch.float32),
         y_std=torch.tensor(std[TARGET_COLS] + eps, dtype=torch.float32),
     )
