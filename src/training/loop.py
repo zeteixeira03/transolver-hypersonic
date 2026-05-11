@@ -187,17 +187,20 @@ def evaluate(
             den = y_true.pow(2).sum(dim=0).sqrt().clamp_min(1e-12)
             per_sim.append((num / den).cpu())
 
+            # surface metric is only meaningful for pressure (channel 2);
+            # u, v are ~0 by no-slip and nu_t is ~0 on the wall, so dividing
+            # by tiny norms blows up the relative-L2 figure
             if surface.any():
-                num_s = (pred[surface] - y_true[surface]).pow(2).sum(dim=0).sqrt()
-                den_s = y_true[surface].pow(2).sum(dim=0).sqrt().clamp_min(1e-12)
+                p_pred_s = pred[surface, 2]
+                p_true_s = y_true[surface, 2]
+                num_s = (p_pred_s - p_true_s).pow(2).sum().sqrt()
+                den_s = p_true_s.pow(2).sum().sqrt().clamp_min(1e-12)
                 per_sim_surf.append((num_s / den_s).cpu())
 
         rl2 = torch.stack(per_sim).mean(dim=0)
         out = {f"rL2_y{c}": float(rl2[c]) for c in range(rl2.shape[0])}
         if per_sim_surf:
-            rl2s = torch.stack(per_sim_surf).mean(dim=0)
-            for c in range(rl2s.shape[0]):
-                out[f"rL2_surf_y{c}"] = float(rl2s[c])
+            out["rL2_surf_p"] = float(torch.stack(per_sim_surf).mean())
         return out
     finally:
         dataset.subsample = saved_subsample

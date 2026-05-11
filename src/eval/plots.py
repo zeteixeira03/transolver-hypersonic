@@ -91,12 +91,16 @@ def plot_acceptance(
     den = y_true.pow(2).sum(dim=0).sqrt().clamp_min(1e-12)
     rl2_full = (num / den).cpu().numpy()
 
+    # surface rL2 only computed for pressure: u, v are ~0 by no-slip and
+    # nu_t is ~0 on the wall, so per-channel rel-L2 there is meaningless
     if surface.any():
-        num_s = (pred[surface] - y_true[surface]).pow(2).sum(dim=0).sqrt()
-        den_s = y_true[surface].pow(2).sum(dim=0).sqrt().clamp_min(1e-12)
-        rl2_surf = (num_s / den_s).cpu().numpy()
+        p_pred_s = pred[surface, 2]
+        p_true_s = y_true[surface, 2]
+        num_s = (p_pred_s - p_true_s).pow(2).sum().sqrt()
+        den_s = p_true_s.pow(2).sum().sqrt().clamp_min(1e-12)
+        rl2_surf_p = float(num_s / den_s)
     else:
-        rl2_surf = np.full(4, np.nan)
+        rl2_surf_p = float("nan")
 
     # panel 1: surface Cp(x), split by surface-normal y-sign so upper and
     # lower surface plot as two separate single-valued curves instead of a
@@ -128,7 +132,7 @@ def plot_acceptance(
     ax1.invert_yaxis()
     ax1.set_xlabel("x [m]")
     ax1.set_ylabel("Cp")
-    ax1.set_title(f"surface Cp, surf rL2(p) = {rl2_surf[2]:.3f}")
+    ax1.set_title(f"surface Cp, surf rL2(p) = {rl2_surf_p:.3f}")
     ax1.grid(alpha=0.3)
     ax1.legend()
 
@@ -154,5 +158,5 @@ def plot_acceptance(
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
 
     metrics = {f"rL2_y{c}": float(rl2_full[c]) for c in range(4)}
-    metrics |= {f"rL2_surf_y{c}": float(rl2_surf[c]) for c in range(4)}
+    metrics["rL2_surf_p"] = rl2_surf_p
     return fig, metrics
