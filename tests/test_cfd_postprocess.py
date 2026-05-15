@@ -201,9 +201,55 @@ def test_extract_training_tensors_from_synthetic_vtu(tmp_path):
 
 
 def test_shock_standoff_handles_no_shock():
-    # uniform freestream, no shock
+    # uniform freestream, no shock at all -- all picks should be rejected and
+    # standoff returned as NaN rather than a near-endpoint constant
     x = np.linspace(-0.04, 0.0, 1000)
     p = np.full_like(x, 100.0)
     res = find_shock_standoff({"x": x, "p": p}, p_inf=100.0)
-    # gradient maximum will land somewhere, threshold returns nan
     assert np.isnan(res["x_shock_threshold"])
+    assert res["method"] == "none"
+    assert res["valid"] is False
+    assert np.isnan(res["standoff"])
+
+
+def test_shock_standoff_collapsed_returns_nan():
+    """Shock pinned within a few cells of the body endpoint: must be NaN'd.
+
+    This is the Phase 3 sharp-cone stall failure mode -- the second-order
+    SU2 solve settles with the bow shock at x ~ -1 grid cell, behind which
+    a 6000 K shock layer sits against a 300 K wall. Pre-fix, the threshold
+    pick latched onto the second-to-last grid index and the standoff came
+    back as a finite ~3e-4 m constant, silently passing along garbage data.
+    """
+    n = 2000
+    x = np.linspace(-0.6, 0.0, n)
+    dx = (x[-1] - x[0]) / (n - 1)
+    truth = x[-2]  # one cell from the body endpoint
+    p = 100.0 + 0.5 * (1.4e4 - 100.0) * (1.0 + np.tanh((x - truth) / (0.5 * dx)))
+    res = find_shock_standoff({"x": x, "p": p}, p_inf=100.0, min_cells_from_body=3)
+    assert res["method"] == "none"
+    assert res["valid"] is False
+    assert np.isnan(res["standoff"])
+    assert np.isnan(res["x_shock"])
+
+
+def test_shock_standoff_far_upstream_pick_rejected():
+    # if the only "shock-like" feature sits within min_cells of the freestream
+    # end of the line, it is also degenerate (no real bow shock found)
+    n = 2000
+    x = np.linspace(-0.6, 0.0, n)
+    p = np.full_like(x, 100.0)
+    p[:2] = 1.4e4  # spurious spike at the upstream end
+    res = find_shock_standoff({"x": x, "p": p}, p_inf=100.0, min_cells_from_body=3)
+    assert res["method"] == "none"
+    assert np.isnan(res["standoff"])
+
+
+def test_shock_standoff_valid_pick_marked_valid():
+    # well-resolved shock far from both endpoints stays valid and reports
+    # the standoff with the same sign convention as before the NaN guard
+    axis = _synthetic_axis(x_shock=-0.005)
+    res = find_shock_standoff(axis, p_inf=100.0)
+    assert res["valid"] is True
+    assert res["method"] == "midpoint"
+    assert res["standoff"] == pytest.approx(0.005, abs=3e-4)

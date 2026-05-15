@@ -215,6 +215,7 @@ def find_shock_standoff(
     *,
     threshold_factor: float = 2.0,
     smooth: int = 5,
+    min_cells_from_body: int = 3,
 ) -> dict:
     """Locate the bow shock along an axis-line sample, return standoff distance.
 
@@ -228,6 +229,13 @@ def find_shock_standoff(
     The midpoint pick is reported as primary because it is least sensitive
     to numerical shock smearing.
 
+    Degenerate detections (a pick within ``min_cells_from_body`` grid cells of
+    either endpoint of the sample line) are treated as missing: the field
+    either has no resolvable shock between freestream and the body, or the
+    shock has collapsed onto the wall and the picks have latched onto a few
+    cells from the line endpoint. The returned standoff is NaN in that case
+    and downstream sanity checks see NaN rel error, not a silent constant.
+
     Parameters
     ----------
     axis : dict
@@ -238,12 +246,16 @@ def find_shock_standoff(
         Multiplier on p_inf for the leading-edge threshold pick.
     smooth : int
         Boxcar window for gradient smoothing.
+    min_cells_from_body : int
+        Minimum number of axis-line cells between a valid pick and either
+        endpoint. Picks within this margin are NaN'd. Default 3.
 
     Returns
     -------
     dict
-        ``x_shock`` (negative for an upstream shock), ``standoff`` (positive),
-        per-method picks, and ``method`` (which pick is primary).
+        ``x_shock`` (negative for an upstream shock), ``standoff`` (positive;
+        NaN if no valid pick), per-method picks, ``method`` ("midpoint",
+        "gradient", "threshold", or "none"), and ``valid`` (bool).
     """
     x = np.asarray(axis["x"])
     p = np.asarray(axis["p"])
@@ -252,6 +264,13 @@ def find_shock_standoff(
 
     order = np.argsort(x)
     x, p = x[order], p[order]
+
+    dx = (x[-1] - x[0]) / (len(x) - 1)
+    x_lo = x[0] + min_cells_from_body * dx
+    x_hi = x[-1] - min_cells_from_body * dx
+
+    def _valid(xs: float) -> bool:
+        return not np.isnan(xs) and x_lo <= xs <= x_hi
 
     if smooth > 1:
         kernel = np.ones(smooth) / smooth
@@ -277,22 +296,28 @@ def find_shock_standoff(
         p_post = float("nan")
         x_mid = float("nan")
 
-    # midpoint preferred; fall back to gradient, then threshold
-    if not np.isnan(x_mid):
-        x_shock, method = x_mid, "midpoint"
-    elif 1 < i_grad < len(x) - 2:
-        x_shock, method = x_grad, "gradient"
-    else:
-        x_shock, method = x_thr, "threshold"
+    # midpoint preferred; fall back to gradient, then threshold. each pick
+    # must lie at least min_cells_from_body cells inside the sample line, so
+    # a collapsed shock (pick at the body end) or a missed shock (pick at
+    # the freestream end) returns NaN instead of a near-endpoint artifact
+    x_shock: float = float("nan")
+    method = "none"
+    for cand, name in ((x_mid, "midpoint"), (x_grad, "gradient"), (x_thr, "threshold")):
+        if _valid(cand):
+            x_shock, method = cand, name
+            break
 
+    valid = method != "none"
+    standoff = -x_shock if valid else float("nan")
     return {
         "x_shock": x_shock,
-        "standoff": -x_shock,
+        "standoff": standoff,
         "x_shock_midpoint": x_mid,
         "x_shock_gradient": x_grad,
         "x_shock_threshold": x_thr,
         "p_post_plateau": p_post,
         "method": method,
+        "valid": valid,
     }
 
 

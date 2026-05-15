@@ -29,6 +29,17 @@ cfd = [
     "gmsh>=4.12",
     "vtk>=9.3",
     "meshio>=5.3",
+    "pyvista>=0.43",
+    "huggingface-hub>=0.20",
+]
+# generation-only deps for a headless CFD box (Oracle A1): no torch, no airfrans
+gen = [
+    "numpy>=1.26",
+    "scipy>=1.11",
+    "matplotlib>=3.8",
+    "gmsh>=4.12",
+    "pyvista>=0.43",
+    "huggingface-hub>=0.20",
 ]
 dev = [
     "pytest>=8.0",

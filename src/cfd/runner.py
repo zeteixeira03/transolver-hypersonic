@@ -49,6 +49,8 @@ def render_cfg(
     cfl_max: float = 5.0,
     muscl: bool = True,
     restart_sol: bool = False,
+    mglevel: int = 0,
+    conv_minval: float = -8.0,
     volume_name: str = "flow",
     surface_name: str = "surface_flow",
     restart_name: str = "restart_flow",
@@ -65,6 +67,8 @@ def render_cfg(
         "__T_W__":         f"{T_w}",
         "__ITER__":        f"{iter_max}",
         "__CFL_MAX__":     f"{cfl_max}",
+        "__MGLEVEL__":     f"{mglevel}",
+        "__CONV_MINVAL__": f"{conv_minval}",
         "__MUSCL__":       "YES" if muscl else "NO",
         "__RESTART_SOL__": "YES" if restart_sol else "NO",
         "__MESH__":        mesh_filename,
@@ -188,6 +192,8 @@ def run_case(
     cfl_max: float = 5.0,
     muscl: bool = True,
     restart_sol: bool = False,
+    mglevel: int = 0,
+    conv_minval: float = -8.0,
     wsl_distro: str | None = None,
     conda_env: str | None = None,
     nprocs: int = 1,
@@ -247,6 +253,8 @@ def run_case(
         cfl_max=cfl_max,
         muscl=muscl,
         restart_sol=restart_sol,
+        mglevel=mglevel,
+        conv_minval=conv_minval,
     )
 
     result = run_su2(
