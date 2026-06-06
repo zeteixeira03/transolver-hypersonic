@@ -53,6 +53,36 @@ def sutherland_mu(T: float) -> float:
     return MU_REF * (T / T_REF) ** 1.5 * (T_REF + S_SUTH) / (T + S_SUTH)
 
 
+def knudsen_number(M_inf: float, T_inf: float, p_inf: float, R_n: float) -> float:
+    """Freestream Knudsen number on the nose radius, Kn = 1.26 sqrt(gamma) M / Re_n.
+
+    Re_n is the nose-radius Reynolds number rho_inf V_inf R_n / mu(T_inf). The
+    continuum no-slip Navier-Stokes model the dataset assumes is valid only for
+    Kn below ~0.01; above that the wall develops velocity slip and a temperature
+    jump the solver does not represent, and the bow shock and boundary layer
+    merge into a thick viscous layer the inviscid Fay-Riddell and Billig
+    correlations no longer describe.
+
+    Parameters
+    ----------
+    M_inf : float
+        Freestream Mach number.
+    T_inf, p_inf : float
+        Freestream static temperature (K) and pressure (Pa).
+    R_n : float
+        Nose radius in m.
+
+    Returns
+    -------
+    float
+        Knudsen number on the nose radius (dimensionless).
+    """
+    rho_inf = p_inf / (R_AIR * T_inf)
+    V_inf = M_inf * math.sqrt(GAMMA_AIR * R_AIR * T_inf)
+    Re_n = rho_inf * V_inf * R_n / sutherland_mu(T_inf)
+    return 1.26 * math.sqrt(GAMMA_AIR) * M_inf / Re_n
+
+
 # ============================================================================================
 #                              rayleigh-pitot post-shock stagnation
 # ============================================================================================

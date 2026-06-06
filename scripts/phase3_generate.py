@@ -129,11 +129,18 @@ def phase3_mesh_kwargs(case: Case) -> dict:
     (stop at ``conv_minval`` instead of a fixed iteration count) and warm-starting
     within a geometry cluster, not from a coarser mesh.
     """
+    # absolute floor on bl first cell: pure R_n/30000 scaling drives an
+    # over-resolved BL for small-nose cases (smallnose_midM, R_n=12mm,
+    # q_w +26%/+22% over Fay-Riddell on two runs). Flooring at 5e-7
+    # keeps the canonical recipe untouched (R_n>=15mm cases keep their
+    # original R_n/30000 spec) while coarsening small-nose just enough
+    # to bring the wall heat flux back down.
+    bl_first = max(case.R_n / 30000.0, 5e-7)
     return dict(
         L_far=8.0 * case.R_b,
         h_wall=case.R_n / 120.0,
         h_far=8.0 * case.R_b / 25.0,
-        bl_first_height=case.R_n / 30000.0,
+        bl_first_height=bl_first,
         bl_thickness=0.06 * case.R_n,
         bl_ratio=1.15,
         refine_shock_box=True,
@@ -248,7 +255,7 @@ def solve_case(
         su2_qw=qw, su2_p02=p02, su2_standoff=delta,
     )
     npz_path = run_dir / "case.npz"
-    extract_training_tensors(res["volume_vtu"], save_npz=npz_path)
+    extract_training_tensors(res["volume_vtu"], case=case, save_npz=npz_path)
 
     # drop the bulky intermediates once the tensor is out; restart_flow.dat stays
     # (a successor in the same geometry cluster restarts from it), the mesh and the
@@ -290,6 +297,17 @@ def _maybe_upload_file(path: Path, repo: str | None, path_in_repo: str) -> None:
 
 MIN_SUCCESS_RATE = 0.70
 WARMUP_CASES = 30  # do not enforce the stop rule until this many cases have finished/failed
+# catastrophic-failure thresholds for the gate-based stop rule. these are well
+# outside any plausible systematic postprocess bias (the p02 plateau median runs
+# ~5-10% low on healthy cases, the sd finder ~10-15% low) and cleanly separate
+# the "shock collapsed onto body" cluster (qw +100 to +600%, p02 -50 to -95%,
+# sd -45 to -80%) seen in the first Phase 3 attempt.
+_CATASTROPHIC = {
+    "qw_rel_max":  0.50,    # qw rel err > +50% means the BL solution diverged
+    "p02_rel_min": -0.25,   # p02 rel err < -25% means the post-shock plateau collapsed
+    "sd_rel_min":  -0.30,   # standoff rel err < -30% means the bow shock is on the body
+}
+MAX_CATASTROPHIC_RATE = 0.30  # halt if > this fraction of the last window are catastrophic
 _GATE_TOLS = {"stagnation_heat_flux": 0.15, "stagnation_pressure": 0.05, "shock_standoff": 0.20}
 _GATE_TITLES = {
     "stagnation_heat_flux": "stagnation q_w (Fay-Riddell)",
@@ -313,6 +331,7 @@ def run_quality_gate(db_path: Path, workdir: Path, window: int) -> tuple[bool, s
     rate = done / (done + failed) if (done + failed) else 1.0
 
     rows = L.recent_done(db_path, limit=window)
+    catastrophic_n = 0
     if rows:
         mach = np.array([r["mach"] for r in rows])
         names = tuple(_GATE_TOLS)
@@ -324,9 +343,14 @@ def run_quality_gate(db_path: Path, workdir: Path, window: int) -> tuple[bool, s
                 R_n=r["R_n"], T_w=r["T_w"],
                 su2_qw=r["qw"], su2_p02=r["p02"], su2_standoff=r["standoff"],
             )
+            err = {c.name: c.rel_err for c in s["checks"]}
             for c in s["checks"]:
                 rel[c.name].append(c.rel_err)
             passed += int(s["all_passed"])
+            if (err["stagnation_heat_flux"] > _CATASTROPHIC["qw_rel_max"]
+                    or err["stagnation_pressure"] < _CATASTROPHIC["p02_rel_min"]
+                    or err["shock_standoff"] < _CATASTROPHIC["sd_rel_min"]):
+                catastrophic_n += 1
         fig, axes = plt.subplots(1, 3, figsize=(13, 3.6), sharex=True)
         for ax, k in zip(axes, names):
             ax.axhline(0, color="k", lw=0.6)
@@ -347,7 +371,15 @@ def run_quality_gate(db_path: Path, workdir: Path, window: int) -> tuple[bool, s
 
     if (done + failed) >= WARMUP_CASES and rate < MIN_SUCCESS_RATE:
         return False, f"run success rate {rate*100:.1f}% < {MIN_SUCCESS_RATE*100:.0f}% -- stopping"
-    return True, f"run success {rate*100:.1f}%"
+    if rows and len(rows) >= WARMUP_CASES:
+        cat_rate = catastrophic_n / len(rows)
+        if cat_rate > MAX_CATASTROPHIC_RATE:
+            return False, (f"catastrophic gate-break rate {cat_rate*100:.0f}% over the "
+                           f"last {len(rows)} done cases "
+                           f"(> {MAX_CATASTROPHIC_RATE*100:.0f}%) -- stopping; the recipe "
+                           f"is producing collapsed-shock solutions")
+    return True, (f"run success {rate*100:.1f}% / catastrophic "
+                  f"{catastrophic_n}/{len(rows) if rows else 0}")
 
 
 # ============================================================================================
@@ -430,20 +462,33 @@ def validate_sample(args: argparse.Namespace) -> bool:
     """
     workdir = Path(args.workdir)
     marker = workdir / ".phase3_validated"
-    if marker.exists() and not args.revalidate:
+    only_case = getattr(args, "validate_case", None)
+    if marker.exists() and not args.revalidate and only_case is None:
         prev = json.loads(marker.read_text())
         cases = prev.get("cases", {})
         n_pass = sum(1 for c in cases.values() if c.get("checks_passed"))
         print(f"[validate] already validated {prev.get('when', '?')}: "
               f"{len(cases)} cases ran, {n_pass} cleared all 3 gates; "
-              f"skipping (pass --revalidate to redo)")
+              f"skipping (pass --revalidate to redo, or --validate-case NAME "
+              f"to re-run one case and merge results)")
         return True
 
     valdir = workdir / "_validation"
-    if valdir.exists():
-        shutil.rmtree(valdir)
     distro, env = _detect_invocation()
-    sample = _build_stage2_sample()
+    full_sample = _build_stage2_sample()
+    if only_case is not None:
+        names = [n for n, _ in full_sample]
+        if only_case not in names:
+            raise SystemExit(f"[validate] --validate-case '{only_case}' is not "
+                             f"one of {names}")
+        sample = [(n, c) for n, c in full_sample if n == only_case]
+        case_valdir = valdir / only_case
+        if case_valdir.exists():
+            shutil.rmtree(case_valdir)
+    else:
+        sample = full_sample
+        if valdir.exists():
+            shutil.rmtree(valdir)
     n = len(sample)
     print(f"[validate] solving {n} stage-2 cases with the Phase 3 settings "
           f"(iter_pass1={args.iter_pass1}, iter_pass2={args.iter_pass2}, "
@@ -482,14 +527,32 @@ def validate_sample(args: argparse.Namespace) -> bool:
             "qw": out["qw"], "p02": out["p02"], "standoff": out["standoff"],
         }
 
-    marker.write_text(json.dumps({
-        "when": time.strftime("%Y-%m-%dT%H:%M:%S"),
-        "n_completed": n_completed, "n_gates_clear": n_gates_clear, "n_total": n,
-        "settings": {"conv_minval": args.conv_minval, "iter_pass1": args.iter_pass1,
-                     "iter_pass2": args.iter_pass2, "cfl_max": args.cfl_max,
-                     "mglevel": args.mglevel},
-        "cases": results,
-    }, indent=2))
+    if only_case is not None and marker.exists():
+        prev = json.loads(marker.read_text())
+        merged = dict(prev.get("cases", {}))
+        merged.update(results)
+        n_total = len(merged)
+        n_done = sum(1 for _ in merged)
+        n_clear = sum(1 for c in merged.values() if c.get("checks_passed"))
+        payload = {
+            "when": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "n_completed": n_done, "n_gates_clear": n_clear, "n_total": n_total,
+            "settings": {"conv_minval": args.conv_minval, "iter_pass1": args.iter_pass1,
+                         "iter_pass2": args.iter_pass2, "cfl_max": args.cfl_max,
+                         "mglevel": args.mglevel},
+            "cases": merged,
+            "last_updated_case": only_case,
+        }
+    else:
+        payload = {
+            "when": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "n_completed": n_completed, "n_gates_clear": n_gates_clear, "n_total": n,
+            "settings": {"conv_minval": args.conv_minval, "iter_pass1": args.iter_pass1,
+                         "iter_pass2": args.iter_pass2, "cfl_max": args.cfl_max,
+                         "mglevel": args.mglevel},
+            "cases": results,
+        }
+    marker.write_text(json.dumps(payload, indent=2))
     print(f"\n[validate] passed: {n_completed}/{n} cases completed cleanly, "
           f"{n_gates_clear}/{n} cleared all 3 gates; marker written to {marker}")
     return True
@@ -520,11 +583,16 @@ def worker_loop(args: argparse.Namespace, worker_id: str, stop_flag) -> None:
             return
         case_id, case, restart_from = claim
         run_dir = workdir / f"case_{case_id:04d}"
-        # only warm-start from a predecessor that finished cleanly; a restart file
-        # left by a diverged run would poison this case
+        # warm-start guard: only restart from a predecessor that finished cleanly
+        # AND cleared the three analytical gates. a "done OUT-OF-TOL" predecessor
+        # is a collapsed-shock solution; warm-starting from it propagates the
+        # collapsed field through the geometry cluster (see analyze_gates2: 38/39
+        # broken cases were warm-started in the first Phase 3 attempt)
         restart_src = None
-        if restart_from is not None and L.case_status(db_path, int(restart_from)) == "done":
-            restart_src = workdir / f"case_{int(restart_from):04d}" / "restart_flow.dat"
+        if restart_from is not None:
+            prev = L.case_row(db_path, int(restart_from))
+            if prev is not None and prev["status"] == "done" and prev["checks_passed"]:
+                restart_src = workdir / f"case_{int(restart_from):04d}" / "restart_flow.dat"
         warm = restart_src is not None and restart_src.exists()
         print(f"[{worker_id}] case {case_id} ({'warm' if warm else 'cold'}): "
               f"M={case.mach:.2f} R_n={case.R_n*1e3:.1f}mm theta_c={case.theta_c_deg:.1f}")
@@ -683,6 +751,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-validate", action="store_true", help="skip the stage-2 canonical validation")
     p.add_argument("--revalidate", action="store_true", help="re-run stage 2 even if the marker exists")
     p.add_argument("--validate-only", action="store_true", help="run stages 1-2 and exit")
+    p.add_argument("--validate-case", default=None,
+                   help="run only the named stage-2 case (e.g. smallnose_midM); merges into existing marker")
     p.add_argument("--package-only", action="store_true", help="run stage 4 only (use after a finished sweep)")
     p.add_argument("--force", action="store_true", help="proceed even if preflight reports a failure")
     return p

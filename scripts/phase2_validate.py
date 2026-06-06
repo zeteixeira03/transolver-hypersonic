@@ -186,8 +186,6 @@ def main():
     parser.add_argument("--iter-pass2", type=int, default=15000,
                         help="iterations for second-order continuation")
     parser.add_argument("--cfl-max", type=float, default=5.0)
-    parser.add_argument("--single-pass", action="store_true",
-                        help="use a single second-order solve (no first-order startup)")
     parser.add_argument("--nprocs", type=int, default=1)
     parser.add_argument("--skip-su2", action="store_true",
                         help="skip SU2_CFD (postprocess an existing run)")
@@ -219,24 +217,6 @@ def main():
             "log": run_dir / "su2.log",
             "returncode": 0,
         }
-    elif args.single_pass:
-        t0 = time.time()
-        result = run_case(
-            CANONICAL,
-            run_dir=run_dir,
-            mesh_kwargs=DEFAULT_MESH_KWARGS,
-            iter_max=args.iter_pass2,
-            cfl_max=args.cfl_max,
-            muscl=True,
-            restart_sol=False,
-            wsl_distro=wsl_distro,
-            conda_env=conda_env,
-            nprocs=args.nprocs,
-            timeout=args.timeout,
-        )
-        elapsed = time.time() - t0
-        print(f"[phase2] SU2_CFD (single pass) finished in {elapsed:.1f} s "
-              f"(rc={result['returncode']})")
     else:
         # ---- pass 1: first-order startup ----
         t0 = time.time()

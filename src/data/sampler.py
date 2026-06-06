@@ -30,6 +30,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.stats import qmc
 
+from src.analytical import knudsen_number
 from src.cfd.runner import Case
 
 
@@ -99,7 +100,12 @@ GEOM_BOX = {
     "R_s_ratio": (0.05,  0.30),    # R_s / R_b
 }
 FS_BOX = {
-    "altitude":  (45.0,  78.0),    # km
+    # altitude upper bound was 78 km in the first Phase 3 attempt. p_inf at 78 km
+    # is ~1.3 Pa; the laminar-NS recipe (validated at p_inf >= ~30 Pa in stage 2)
+    # collapses the bow shock onto the body at those pressures, polluting the
+    # cluster via warm restart. The 60 km cap gives p_inf >= ~22 Pa, the floor
+    # the discriminator analysis (analyze_gates2.py) places the broken cluster at.
+    "altitude":  (45.0,  60.0),    # km
     "mach":      (8.0,   25.0),
 }
 
@@ -113,6 +119,14 @@ OOD_SLABS = {
 }
 
 T_WALL = 300.0  # K, fixed isothermal cold wall
+
+# continuum no-slip Navier-Stokes holds below this nose-radius Knudsen number;
+# above it the wall slips and the shock layer merges (see analyze_gates2.py: the
+# broken low-pressure cluster sits at Kn > 0.01). the altitude cap in FS_BOX is a
+# coarse proxy for this; the filter in sample_cases enforces it case by case,
+# since high Mach and small nose radius can push Kn past the floor even at the
+# 60 km cap.
+KN_MAX = 0.01
 
 _GEOM_ORDER = ("R_n", "theta_c", "R_b_ratio", "R_s_ratio")
 _FS_ORDER = ("altitude", "mach")
@@ -245,6 +259,13 @@ def sample_cases(
         fb = {**FS_BOX, **{k: v for k, v in overrides.items() if k in FS_BOX}}
         block, gid = _build_block(name, n_geom_ood, n_fs_ood, gb, fb, rng, gid)
         specs.extend(block)
+    # drop slip-regime draws: continuum no-slip NS and the analytical gates are
+    # invalid above KN_MAX. dropping leaves gaps in geometry clusters, which
+    # init_ledger's restart_from logic chains over (it matches on geom_id).
+    specs = [
+        s for s in specs
+        if knudsen_number(s.case.mach, s.case.T_inf, s.case.p_inf, s.case.R_n) <= KN_MAX
+    ]
     return specs
 
 

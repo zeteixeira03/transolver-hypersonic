@@ -67,11 +67,19 @@ MAX_ATTEMPTS = 2
 # ============================================================================================
 
 def connect(db_path: str | Path) -> sqlite3.Connection:
-    """Open the ledger with WAL and a generous busy timeout for many workers."""
+    """Open the ledger with WAL and a generous busy timeout for many workers.
+
+    ``synchronous=FULL`` fsyncs every commit. On a free-tier laptop that can be
+    hard-restarted at any moment, ``NORMAL`` lost an un-checkpointed WAL and rolled
+    the ledger back ~40 cases; ``FULL`` persists each ``mark_done`` to disk before
+    it returns. The cost is one fsync per case, negligible against a multi-hour
+    solve, and it only pays off if the ledger lives on a real device (the WSL
+    ext4 vhdx ignores barriers, so the workdir must sit on a physical disk).
+    """
     con = sqlite3.connect(str(db_path), timeout=60.0)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
-    con.execute("PRAGMA synchronous=NORMAL")
+    con.execute("PRAGMA synchronous=FULL")
     con.execute("PRAGMA busy_timeout=60000")
     return con
 
@@ -271,6 +279,20 @@ def case_status(db_path: str | Path, case_id: int) -> str | None:
     try:
         row = con.execute("SELECT status FROM cases WHERE case_id=?", (case_id,)).fetchone()
         return row["status"] if row else None
+    finally:
+        con.close()
+
+
+def case_row(db_path: str | Path, case_id: int) -> sqlite3.Row | None:
+    """Return the full row for one case, or None if it is not in the ledger.
+
+    Used by the warm-start guard to inspect ``status`` and ``checks_passed``
+    together: a predecessor warm-starts a successor only if it both finished
+    cleanly and cleared the analytical gates.
+    """
+    con = connect(db_path)
+    try:
+        return con.execute("SELECT * FROM cases WHERE case_id=?", (case_id,)).fetchone()
     finally:
         con.close()
 

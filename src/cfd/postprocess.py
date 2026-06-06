@@ -328,6 +328,7 @@ def find_shock_standoff(
 def extract_training_tensors(
     volume_vtu_path: str | Path,
     *,
+    case: "Case | None" = None,
     save_npz: str | Path | None = None,
 ) -> dict[str, np.ndarray]:
     """Extract per-mesh-node training arrays from a converged SU2 case.
@@ -341,13 +342,19 @@ def extract_training_tensors(
     ----------
     volume_vtu_path : path
         Converged SU2 ``flow.vtu`` for one case.
+    case : Case, optional
+        If provided, the 8 case parameters are saved alongside the field
+        arrays as ``case_params`` (channel order in
+        :data:`src.data.su2.CASE_PARAM_ORDER`). This makes the .npz
+        self-describing for downstream model training.
     save_npz : path, optional
         If provided, save the dict as a compressed .npz alongside the VTU.
 
     Returns
     -------
     dict
-        Keys ``x``, ``r``, ``rho``, ``u``, ``v``, ``T``; all 1-D arrays.
+        Keys ``x``, ``r``, ``rho``, ``u``, ``v``, ``T`` (all 1-D arrays),
+        and ``case_params`` (shape (8,)) when ``case`` is provided.
     """
     import pyvista as pv  # lazy
 
@@ -375,6 +382,12 @@ def extract_training_tensors(
     T = np.asarray(mesh.point_data["Temperature"])
 
     out = {"x": x, "r": r, "rho": rho, "u": u, "v": v, "T": T}
+    if case is not None:
+        out["case_params"] = np.array(
+            [case.R_n, case.theta_c_deg, case.R_b, case.R_s,
+             case.mach, case.T_inf, case.p_inf, case.T_w],
+            dtype=np.float32,
+        )
     if save_npz is not None:
         np.savez_compressed(save_npz, **out)
     return out
