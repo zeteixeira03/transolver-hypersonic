@@ -6,6 +6,14 @@ The three Phase 2 acceptance gates:
 - Stagnation pressure vs Rayleigh-Pitot:     expect agreement within ~5%
 - Bow-shock standoff vs Billig:              expect agreement within ~20%
 
+The standoff gate carries a validity domain. Billig is a sphere-nose fit with no
+cone-angle term; for blunt sphere-cones (large theta_c) the body is far blunter
+than a sphere of radius R_n and the shock genuinely stands off much farther than
+the correlation predicts. Above :data:`THETA_C_BILLIG_MAX` the standoff check is
+marked not-applicable: the SU2 value and the (invalid) Billig value are still
+reported, but the check is excluded from the pass/fail decision. See PHASE_LOG
+2026-06-24.
+
 :func:`compare_to_analytical` returns a structured summary that the validation
 script renders to console and persists to JSON alongside the run artifacts.
 """
@@ -35,6 +43,12 @@ TOL_P02  = 0.05  # Rayleigh-Pitot
 TOL_DELTA = 0.20  # Billig
 TOL_DELTA_HIGH_MACH = 0.50  # Billig correlation under-predicts at high Mach
 M_HIGH = 22.0              # threshold above which the wider Billig tol applies
+# Billig is a sphere-nose standoff fit (no cone-angle term). For sphere-cones
+# blunter than this half-angle the body presents a much wider frontal shape than
+# a sphere of radius R_n, the shock stands off ~2.3x farther, and Billig is no
+# longer a valid yardstick (CFD/Billig tracks theta_c with corr 0.78; clean
+# below 60 deg, ~2.3x above). Standoff is reported but not gated past this.
+THETA_C_BILLIG_MAX = 60.0  # deg
 
 
 # ============================================================================================
@@ -47,6 +61,7 @@ class Check:
     su2: float
     analytical: float
     tolerance: float
+    applicable: bool = True
 
     @property
     def rel_err(self) -> float:
@@ -54,6 +69,10 @@ class Check:
 
     @property
     def passed(self) -> bool:
+        # a check outside its validity domain never fails the case; the rel
+        # error is still computed and reported, just not gated
+        if not self.applicable:
+            return True
         return abs(self.rel_err) <= self.tolerance
 
 
@@ -67,6 +86,7 @@ def compare_to_analytical(
     su2_qw: float,
     su2_p02: float,
     su2_standoff: float,
+    theta_c_deg: float | None = None,
 ) -> dict:
     """Compare three SU2 stagnation/shock quantities against analytical refs.
 
@@ -81,6 +101,11 @@ def compare_to_analytical(
         SU2 stagnation pressure (peak wall pressure), Pa.
     su2_standoff : float
         SU2 bow-shock standoff distance from the nose along r = 0, m.
+    theta_c_deg : float, optional
+        Cone half-angle in degrees. Gates the standoff check: above
+        :data:`THETA_C_BILLIG_MAX` the sphere-Billig reference does not apply
+        and the standoff check is marked not-applicable (reported, not gated).
+        When None the standoff check is gated unconditionally (back-compat).
 
     Returns
     -------
@@ -93,11 +118,13 @@ def compare_to_analytical(
     ref_standoff = billig_standoff(M_inf, R_n)
 
     tol_delta = TOL_DELTA_HIGH_MACH if M_inf > M_HIGH else TOL_DELTA
+    standoff_applicable = theta_c_deg is None or theta_c_deg <= THETA_C_BILLIG_MAX
 
     checks = [
-        Check("stagnation_heat_flux",     abs(su2_qw),       ref_qw,       TOL_QW),
-        Check("stagnation_pressure",      su2_p02,           ref_p02,      TOL_P02),
-        Check("shock_standoff",           su2_standoff,      ref_standoff, tol_delta),
+        Check("stagnation_heat_flux", abs(su2_qw), ref_qw,       TOL_QW),
+        Check("stagnation_pressure",  su2_p02,     ref_p02,      TOL_P02),
+        Check("shock_standoff",       su2_standoff, ref_standoff, tol_delta,
+              applicable=standoff_applicable),
     ]
     return {
         "checks": checks,
@@ -315,10 +342,11 @@ def format_summary(summary: dict) -> str:
     lines.append(f"{'quantity':<24} {'SU2':>14} {'analytical':>14} {'rel err':>9} {'tol':>7} {'pass':>5}")
     lines.append("-" * 76)
     for c in summary["checks"]:
+        verdict = "n/a" if not c.applicable else ("YES" if c.passed else "NO")
         lines.append(
             f"{c.name:<24} {c.su2:>14.4g} {c.analytical:>14.4g} "
             f"{c.rel_err * 100:>+8.2f}% {c.tolerance * 100:>5.0f}% "
-            f"{'YES' if c.passed else 'NO':>5}"
+            f"{verdict:>5}"
         )
     lines.append("-" * 76)
     lines.append(f"all passed: {summary['all_passed']}")

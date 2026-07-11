@@ -137,3 +137,58 @@ def test_fay_riddell_increases_with_density():
 def test_fay_riddell_rejects_subsonic():
     with pytest.raises(ValueError):
         fay_riddell_qw(0.5, 220.0, 100.0, 0.5, 300.0)
+
+
+# ============================================================================================
+#                          standoff gate validity domain (theta_c)
+# ============================================================================================
+
+from src.eval.sanity import THETA_C_BILLIG_MAX, compare_to_analytical
+
+
+def _summary_with_bad_standoff(theta_c_deg):
+    """A case whose qw and p02 match the references exactly but whose standoff
+    is 2.3x Billig (the blunt-cone overshoot). Isolates the standoff gate."""
+    M, T, p, R_n, T_w = 12.0, 250.0, 40.0, 0.015, 300.0
+    ref_qw = fay_riddell_qw(M, T, p, R_n, T_w)
+    ref_p02 = rayleigh_pitot_p02(M, p)
+    ref_sd = billig_standoff(M, R_n)
+    return compare_to_analytical(
+        M_inf=M, T_inf=T, p_inf=p, R_n=R_n, T_w=T_w,
+        su2_qw=ref_qw, su2_p02=ref_p02, su2_standoff=2.3 * ref_sd,
+        theta_c_deg=theta_c_deg,
+    )
+
+
+def _standoff_check(summary):
+    return next(c for c in summary["checks"] if c.name == "shock_standoff")
+
+
+def test_standoff_gated_for_slender_cone():
+    # below the cutoff Billig applies: a 2.3x standoff is a real miss
+    s = _summary_with_bad_standoff(45.0)
+    assert _standoff_check(s).applicable is True
+    assert s["all_passed"] is False
+
+
+def test_standoff_not_applicable_for_blunt_cone():
+    # above the cutoff Billig is the wrong yardstick: standoff is reported but
+    # not gated, so the same 2.3x value does not fail the case
+    s = _summary_with_bad_standoff(67.0)
+    sd = _standoff_check(s)
+    assert sd.applicable is False
+    assert sd.passed is True
+    assert sd.rel_err == pytest.approx(1.3, rel=1e-6)  # still computed and reported
+    assert s["all_passed"] is True
+
+
+def test_standoff_cutoff_is_inclusive():
+    # exactly at the cutoff Billig still applies
+    assert _standoff_check(_summary_with_bad_standoff(THETA_C_BILLIG_MAX)).applicable is True
+
+
+def test_standoff_gated_when_theta_c_unknown():
+    # back-compat: callers that pass no theta_c gate the standoff unconditionally
+    s = _summary_with_bad_standoff(None)
+    assert _standoff_check(s).applicable is True
+    assert s["all_passed"] is False

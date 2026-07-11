@@ -252,7 +252,7 @@ def solve_case(
 
     summary = compare_to_analytical(
         M_inf=case.mach, T_inf=case.T_inf, p_inf=case.p_inf, R_n=case.R_n, T_w=case.T_w,
-        su2_qw=qw, su2_p02=p02, su2_standoff=delta,
+        su2_qw=qw, su2_p02=p02, su2_standoff=delta, theta_c_deg=case.theta_c_deg,
     )
     npz_path = run_dir / "case.npz"
     extract_training_tensors(res["volume_vtu"], case=case, save_npz=npz_path)
@@ -342,6 +342,7 @@ def run_quality_gate(db_path: Path, workdir: Path, window: int) -> tuple[bool, s
                 M_inf=r["mach"], T_inf=r["T_inf"], p_inf=r["p_inf"],
                 R_n=r["R_n"], T_w=r["T_w"],
                 su2_qw=r["qw"], su2_p02=r["p02"], su2_standoff=r["standoff"],
+                theta_c_deg=r["theta_c_deg"],
             )
             err = {c.name: c.rel_err for c in s["checks"]}
             for c in s["checks"]:
