@@ -14,7 +14,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-import torch
+
+torch = pytest.importorskip("torch")
 
 from src.data.su2 import (
     CASE_PARAM_ORDER,

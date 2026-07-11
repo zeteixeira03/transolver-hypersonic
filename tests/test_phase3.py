@@ -7,7 +7,9 @@ import pytest
 
 from src.cfd import ledger as L
 from src.cfd.runner import Case
+from src.analytical import knudsen_number
 from src.data.sampler import (
+    KN_MAX,
     CaseSpec,
     FS_BOX,
     GEOM_BOX,
@@ -51,8 +53,15 @@ def test_atmosphere_rejects_out_of_range():
 def test_sample_cases_count_and_determinism():
     a = sample_cases(n_geom=8, n_fs=3, n_geom_ood=2, n_fs_ood=1, seed=1)
     b = sample_cases(n_geom=8, n_fs=3, n_geom_ood=2, n_fs_ood=1, seed=1)
-    assert len(a) == 8 * 3 + len(OOD_SLABS) * 2 * 1
+    # the Kn <= KN_MAX filter drops rarefied draws, so the count is bounded
+    # above by the nominal DOE size but need not reach it
+    nominal = 8 * 3 + len(OOD_SLABS) * 2 * 1
+    assert 0 < len(a) <= nominal
+    assert len(a) == len(b)
     assert all(isinstance(s, CaseSpec) for s in a)
+    for s in a:
+        c = s.case
+        assert knudsen_number(c.mach, c.T_inf, c.p_inf, c.R_n) <= KN_MAX
     # determinism: same seed -> identical case parameters
     for sa, sb in zip(a, b):
         assert sa.group == sb.group and sa.geom_id == sb.geom_id
