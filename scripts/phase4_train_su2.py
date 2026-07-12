@@ -78,16 +78,21 @@ OOD_GROUPS = ("cone_high", "mach_high", "nose_large", "nose_small")
 #                                       split helpers
 # ============================================================================================
 
+def _connect_ro(ledger_path: Path) -> sqlite3.Connection:
+    """Read-only immutable connection; works on read-only mounts (Kaggle input)."""
+    return sqlite3.connect(f"file:{Path(ledger_path).as_posix()}?mode=ro&immutable=1", uri=True)
+
+
 def load_case_groups(ledger_path: Path) -> dict[int, str]:
     """Return ``{case_id: group_name}`` for every row in the ledger."""
-    con = sqlite3.connect(str(ledger_path))
+    con = _connect_ro(ledger_path)
     rows = con.execute("select case_id, group_name from cases").fetchall()
     con.close()
     return {int(cid): g for cid, g in rows}
 
 
 def load_case_geom_ids(ledger_path: Path) -> dict[int, int]:
-    con = sqlite3.connect(str(ledger_path))
+    con = _connect_ro(ledger_path)
     rows = con.execute("select case_id, geom_id from cases").fetchall()
     con.close()
     return {int(cid): int(g) for cid, g in rows}
