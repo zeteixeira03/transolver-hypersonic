@@ -59,6 +59,7 @@ from src.data.su2 import (
     SU2NormStats,
     TARGET_DIM,
     TARGET_ORDER,
+    case_id_from_npz_path,
     compute_norm_stats,
     denormalize_targets,
     list_case_npzs,
@@ -93,8 +94,8 @@ def load_case_geom_ids(ledger_path: Path) -> dict[int, int]:
 
 
 def case_id_from_path(path: Path) -> int:
-    """``data/raw/phase3/case_0042/case.npz`` -> 42."""
-    return int(path.parent.name.split("_")[1])
+    """``case_0042/case.npz`` or ``case_0042.npz`` -> 42."""
+    return case_id_from_npz_path(path)
 
 
 def split_paths(

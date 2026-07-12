@@ -25,11 +25,14 @@ from src.data.su2 import (
     SU2Dataset,
     SU2NormStats,
     TARGET_DIM,
+    case_id_from_npz_path,
     compute_norm_stats,
+    denormalize_targets,
     list_case_npzs,
     load_case_npz,
     reconstruct_pressure,
     stack_case_features,
+    transform_targets,
 )
 from src.eval.sanity import (
     compute_q_w_from_T,
@@ -118,11 +121,30 @@ def test_compute_norm_stats_unit_variance_target(tmp_path):
     targets = np.concatenate(
         [stack_case_features(load_case_npz(p))[1] for p in paths], axis=0,
     )
+    # stats are fit in transformed space (log10 on rho, T by default)
+    targets_t = transform_targets(targets, stats.log_targets)
     x_norm = (feats - stats.x_mean.numpy()) / stats.x_std.numpy()
-    y_norm = (targets - stats.y_mean.numpy()) / stats.y_std.numpy()
+    y_norm = (targets_t - stats.y_mean.numpy()) / stats.y_std.numpy()
     assert np.allclose(x_norm.mean(axis=0), 0, atol=1e-4)
     assert np.allclose(y_norm.mean(axis=0), 0, atol=1e-4)
     assert np.allclose(y_norm.std(axis=0), 1, atol=1e-3)
+
+
+def test_denormalize_round_trips_log_channels(tmp_path):
+    paths = [_synth_case(tmp_path, f"case_{i:04d}", n=300, seed=i) for i in range(3)]
+    stats = compute_norm_stats(paths)
+    assert stats.log_targets == ("rho", "T")
+    ds = SU2Dataset(paths, stats, subsample=None)
+    item = ds[0]
+    recovered = denormalize_targets(item["y"], stats)
+    assert torch.allclose(recovered, item["y_raw"], rtol=1e-4, atol=1e-6)
+    # stats survive a save/load cycle with the log flag intact
+    p = tmp_path / "stats.pt"
+    stats.save(p)
+    loaded = SU2NormStats.load(p)
+    assert loaded.log_targets == stats.log_targets
+    recovered2 = denormalize_targets(item["y"], loaded)
+    assert torch.allclose(recovered2, item["y_raw"], rtol=1e-4, atol=1e-6)
 
 
 def test_su2_dataset_returns_normalized_tensors(tmp_path):
@@ -154,6 +176,20 @@ def test_list_case_npzs_sorted(tmp_path):
         _synth_case(tmp_path, f"case_{i:04d}")
     found = list_case_npzs(tmp_path)
     assert [p.parent.name for p in found] == ["case_0000", "case_0001", "case_0002"]
+    assert [case_id_from_npz_path(p) for p in found] == [0, 1, 2]
+
+
+def test_list_case_npzs_flat_layout(tmp_path):
+    # kaggle upload layout: case_XXXX.npz at the top level, no subdirs
+    (tmp_path / "nested").mkdir()
+    for i in [3, 1]:
+        src = _synth_case(tmp_path / "nested", f"case_{i:04d}")
+        (tmp_path / f"case_{i:04d}.npz").write_bytes(Path(src).read_bytes())
+    import shutil
+    shutil.rmtree(tmp_path / "nested")
+    found = list_case_npzs(tmp_path)
+    assert [p.name for p in found] == ["case_0001.npz", "case_0003.npz"]
+    assert [case_id_from_npz_path(p) for p in found] == [1, 3]
 
 
 # ============================================================================================

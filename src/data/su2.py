@@ -57,6 +57,14 @@ R_SPECIFIC_AIR = 287.058                      # J/(kg K), reconstruct p = rho R 
 #                                       normalization stats
 # ============================================================================================
 
+# targets standardized in log10 space by default. the W0 normalization study
+# (data/samples/phase4_normalization.png) pooled 21 cases: plain z on rho has
+# skew 7.0, 91% of nodes inside |z| < 0.5 and a 25-sigma shock-layer tail; T
+# reaches 29450 K with a 4-sigma tail. log10 flattens both (max |z| < 4, skew
+# < 0.6). u and v are well-behaved under plain standardization.
+DEFAULT_LOG_TARGETS = ("rho", "T")
+
+
 @dataclass
 class SU2NormStats:
     """Per-channel mean and std for inputs and targets.
@@ -64,13 +72,23 @@ class SU2NormStats:
     Inputs are 10-channel ``[x, r, R_n, theta_c, R_b, R_s, M, T_inf, p_inf, T_w]``.
     Targets are 4-channel ``[rho, u, v, T]``. Each channel is standardized
     independently; the CLAUDE.md numerical-scale rule forbids sharing
-    constants across fields with different orders of magnitude.
+    constants across fields with different orders of magnitude. Channels named
+    in ``log_targets`` are mapped to log10 before standardization (stats are
+    fit in log space); the flag persists with the stats so training and
+    inference cannot disagree.
     """
 
     x_mean: torch.Tensor   # (10,)
     x_std: torch.Tensor    # (10,)
     y_mean: torch.Tensor   # (4,)
     y_std: torch.Tensor    # (4,)
+    log_targets: tuple[str, ...] = DEFAULT_LOG_TARGETS
+
+    @property
+    def log_mask(self) -> torch.Tensor:
+        return torch.tensor(
+            [name in self.log_targets for name in TARGET_ORDER], dtype=torch.bool,
+        )
 
     def to(self, device: torch.device) -> "SU2NormStats":
         return SU2NormStats(
@@ -78,18 +96,30 @@ class SU2NormStats:
             x_std=self.x_std.to(device),
             y_mean=self.y_mean.to(device),
             y_std=self.y_std.to(device),
+            log_targets=self.log_targets,
         )
 
     def save(self, path: str | Path) -> None:
         torch.save({
             "x_mean": self.x_mean, "x_std": self.x_std,
             "y_mean": self.y_mean, "y_std": self.y_std,
+            "log_targets": list(self.log_targets),
         }, str(path))
 
     @classmethod
     def load(cls, path: str | Path) -> "SU2NormStats":
         d = torch.load(str(path), map_location="cpu")
-        return cls(d["x_mean"], d["x_std"], d["y_mean"], d["y_std"])
+        return cls(d["x_mean"], d["x_std"], d["y_mean"], d["y_std"],
+                   tuple(d.get("log_targets", ())))
+
+
+def transform_targets(y_raw: np.ndarray, log_targets: tuple[str, ...]) -> np.ndarray:
+    """Map physical targets into the space stats are fit in (log10 where flagged)."""
+    y = y_raw.copy()
+    for i, name in enumerate(TARGET_ORDER):
+        if name in log_targets:
+            y[:, i] = np.log10(np.clip(y[:, i], 1e-30, None))
+    return y
 
 
 # ============================================================================================
@@ -153,6 +183,7 @@ def compute_norm_stats(
     paths: list[str | Path],
     *,
     eps: float = 1e-8,
+    log_targets: tuple[str, ...] = DEFAULT_LOG_TARGETS,
 ) -> SU2NormStats:
     """Compute per-channel mean/std across all training points.
 
@@ -178,6 +209,7 @@ def compute_norm_stats(
     for path in paths:
         case = load_case_npz(path)
         feats, targets = stack_case_features(case)
+        targets = transform_targets(targets, log_targets)
         n = feats.shape[0]
         if n == 0:
             continue
@@ -213,6 +245,7 @@ def compute_norm_stats(
         x_std=torch.tensor(x_std, dtype=torch.float32),
         y_mean=torch.tensor(y_mean, dtype=torch.float32),
         y_std=torch.tensor(y_std, dtype=torch.float32),
+        log_targets=log_targets,
     )
 
 
@@ -265,8 +298,9 @@ class SU2Dataset(Dataset):
         y_raw = torch.from_numpy(targets)
         pos = x_raw[:, :POS_DIM].clone()                           # unnormalized (x, r)
 
+        y_t = torch.from_numpy(transform_targets(targets, self.stats.log_targets))
         x = (x_raw - self.stats.x_mean) / self.stats.x_std
-        y = (y_raw - self.stats.y_mean) / self.stats.y_std
+        y = (y_t - self.stats.y_mean) / self.stats.y_std
 
         return {
             "x": x,
@@ -283,8 +317,17 @@ class SU2Dataset(Dataset):
 # ============================================================================================
 
 def denormalize_targets(y_norm: torch.Tensor, stats: SU2NormStats) -> torch.Tensor:
-    """Map a normalized prediction or target back to physical units (SI)."""
-    return y_norm * stats.y_std.to(y_norm.device) + stats.y_mean.to(y_norm.device)
+    """Map a normalized prediction or target back to physical units (SI).
+
+    Inverts the standardization, then the log10 transform on channels named
+    in ``stats.log_targets``.
+    """
+    y = y_norm * stats.y_std.to(y_norm.device) + stats.y_mean.to(y_norm.device)
+    mask = stats.log_mask.to(y_norm.device)
+    if mask.any():
+        y = y.clone()
+        y[..., mask] = torch.pow(10.0, y[..., mask])
+    return y
 
 
 def reconstruct_pressure(rho: torch.Tensor, T: torch.Tensor) -> torch.Tensor:
@@ -303,11 +346,21 @@ def reconstruct_pressure(rho: torch.Tensor, T: torch.Tensor) -> torch.Tensor:
 # ============================================================================================
 
 def list_case_npzs(workdir: str | Path) -> list[Path]:
-    """Return the sorted list of ``case_XXXX/case.npz`` under ``workdir``.
+    """Return the sorted list of case tensors under ``workdir``.
 
-    Used both by training (to build the path list for ``SU2Dataset``) and
-    by the supervisor for completion checks. Sorting by directory name
-    keeps the order stable across machines.
+    Accepts both layouts: ``case_XXXX/case.npz`` (sweep workdir) and flat
+    ``case_XXXX.npz`` (Kaggle dataset upload). Used both by training (to
+    build the path list for ``SU2Dataset``) and by the supervisor for
+    completion checks. Sorting keeps the order stable across machines.
     """
     workdir = Path(workdir)
-    return sorted(workdir.glob("case_*/case.npz"))
+    nested = sorted(workdir.glob("case_*/case.npz"))
+    if nested:
+        return nested
+    return sorted(workdir.glob("case_*.npz"))
+
+
+def case_id_from_npz_path(path: Path) -> int:
+    """``case_0042/case.npz`` or ``case_0042.npz`` -> 42."""
+    stem = path.parent.name if path.name == "case.npz" else path.stem
+    return int(stem.split("_")[1])
