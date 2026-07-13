@@ -57,7 +57,7 @@ R_SPECIFIC_AIR = 287.058                      # J/(kg K), reconstruct p = rho R 
 #                                       normalization stats
 # ============================================================================================
 
-# targets standardized in log10 space by default. the W0 normalization study
+# targets standardized in log10 space by default. the normalization study
 # (data/samples/phase4_normalization.png) pooled 21 cases: plain z on rho has
 # skew 7.0, 91% of nodes inside |z| < 0.5 and a 25-sigma shock-layer tail; T
 # reaches 29450 K with a 4-sigma tail. log10 flattens both (max |z| < 4, skew
@@ -71,11 +71,7 @@ class SU2NormStats:
 
     Inputs are 10-channel ``[x, r, R_n, theta_c, R_b, R_s, M, T_inf, p_inf, T_w]``.
     Targets are 4-channel ``[rho, u, v, T]``. Each channel is standardized
-    independently; the CLAUDE.md numerical-scale rule forbids sharing
-    constants across fields with different orders of magnitude. Channels named
-    in ``log_targets`` are mapped to log10 before standardization (stats are
-    fit in log space); the flag persists with the stats so training and
-    inference cannot disagree.
+    independently.
     """
 
     x_mean: torch.Tensor   # (10,)
@@ -189,7 +185,7 @@ def compute_norm_stats(
 
     Loads one case at a time (constant peak memory in the number of cases)
     and merges per-case (mean, M2, count) summaries with the parallel-Welford
-    update -- same pattern as :func:`src.data.airfrans.compute_norm_stats`.
+    update.
 
     Parameters
     ----------
