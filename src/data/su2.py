@@ -308,7 +308,7 @@ class SU2Dataset(Dataset):
             "y_raw": y_raw,
             "pos": pos,
             "case_params": torch.from_numpy(case["case_params"]),
-            "name": path.parent.name,
+            "name": path.parent.name if path.name == "case.npz" else path.stem,
         }
 
 
