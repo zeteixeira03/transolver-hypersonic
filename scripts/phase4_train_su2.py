@@ -18,6 +18,13 @@ so unseen freestream conditions on seen shapes), ``test`` (family holdout:
 whole geometry clusters unseen in training), and the OOD slabs
 (extrapolation past the core parameter box).
 
+Deep ensembles (W2)
+-------------------
+``--init-seed`` decouples training stochasticity (model init, data order,
+node subsampling) from the split seed. Ensemble members share ``--seed``
+(identical splits and norm stats) and differ only in ``--init-seed``; the
+seed-0 W1 run at the chosen slice count is member #1.
+
 Eval-only mode
 --------------
 ``--eval-only RUNDIR`` skips training, loads ``RUNDIR/best.pt`` and
@@ -50,6 +57,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import sqlite3
 import sys
 import time
@@ -402,7 +410,11 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--eval-only", default=None, metavar="RUNDIR",
                    help="skip training; evaluate RUNDIR/best.pt with RUNDIR/norm_stats.pt "
                         "on all tiers and write results to --out")
-    p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--seed", type=int, default=0,
+                   help="split seed; also seeds training RNGs unless --init-seed is given")
+    p.add_argument("--init-seed", type=int, default=None,
+                   help="training RNG seed (init, data order, subsampling); "
+                        "splits stay on --seed. For deep-ensemble members.")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--grad-clip", type=float, default=1.0)
     p.add_argument("--val-every", type=int, default=10)
@@ -414,8 +426,11 @@ def main() -> None:
     workdir = Path(args.workdir).resolve()
     out = Path(args.out).resolve()
     out.mkdir(parents=True, exist_ok=True)
-    torch.manual_seed(args.seed)
-    np.random.seed(args.seed)
+    init_seed = args.seed if args.init_seed is None else args.init_seed
+    torch.manual_seed(init_seed)
+    np.random.seed(init_seed)
+    random.seed(init_seed)
+    print(f"[main] split seed {args.seed}, init seed {init_seed}")
 
     ledger = workdir / "ledger.db"
     paths = list_case_npzs(workdir)
