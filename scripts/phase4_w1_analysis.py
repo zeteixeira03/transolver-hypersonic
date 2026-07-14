@@ -198,11 +198,14 @@ def envelope_figure(run: dict, fig_out: Path, guard_factor: float = 2.0) -> floa
             binned = [r["mean_rL2"] for r in out_rows if lo <= r["dist"] <= hi]
             if not binned:
                 continue
-            med = float(np.median(binned))
             trend_x.append(float((lo + hi) / 2))
-            trend_y.append(med)
-            if guard_dist is None and med > guard_factor * base:
-                guard_dist = float(lo)
+            trend_y.append(float(np.median(binned)))
+        # guard threshold: linear interpolation of the first trend crossing
+        thresh = guard_factor * base
+        for (x0, y0), (x1, y1) in zip(zip(trend_x, trend_y), zip(trend_x[1:], trend_y[1:])):
+            if y0 <= thresh < y1:
+                guard_dist = x0 + (thresh - y0) / (y1 - y0) * (x1 - x0)
+                break
 
     fig, ax = plt.subplots(figsize=(7, 4.5))
     groups = sorted({r["split"] for r in rows})
@@ -216,7 +219,7 @@ def envelope_figure(run: dict, fig_out: Path, guard_factor: float = 2.0) -> floa
                label=f"{guard_factor:.0f}x holdout median")
     if guard_dist is not None:
         ax.axvline(guard_dist, color="crimson", lw=1.2,
-                   label=f"guard threshold d = {guard_dist:.2f}")
+                   label=f"guard threshold d = {guard_dist:.3f}")
     ax.set_xlabel("envelope distance (L-inf normalized box exceedance)")
     ax.set_ylabel("per-case mean rel-L2")
     ax.set_title(f"Error growth outside the training envelope (M = {run['slice_num']})")
