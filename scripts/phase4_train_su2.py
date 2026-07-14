@@ -356,14 +356,17 @@ def evaluate(
             R_n = float(item["case_params"][CASE_PARAM_ORDER.index("R_n")])
             try:
                 wall = identify_wall_nodes(T_true, T_w)
-                rec["qw_true"] = float(compute_q_w_from_T(
+                qw_true = float(compute_q_w_from_T(
                     x=xy[:, 0], r=xy[:, 1], T=T_true, T_w=T_w,
                     wall_indices=wall, y_axis_skip=0.05 * R_n, n_average=3,
                 )["q_w"])
-                rec["qw_pred"] = float(compute_q_w_from_T(
+                qw_pred = float(compute_q_w_from_T(
                     x=xy[:, 0], r=xy[:, 1], T=T_pred, T_w=T_w,
                     wall_indices=wall, y_axis_skip=0.05 * R_n, n_average=3,
                 )["q_w"])
+                # assign only when both succeed; a lone qw_true poisons the
+                # (true, pred) pair arithmetic downstream
+                rec["qw_true"], rec["qw_pred"] = qw_true, qw_pred
             except ValueError:
                 pass                       # mesh / wall-normal degeneracy; keep the rL2 record
             per_case.append(rec)
