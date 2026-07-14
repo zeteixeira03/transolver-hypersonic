@@ -54,8 +54,7 @@ class PhysicsAttentionIrregularMesh(nn.Module):
        via softmax weights w(x_i, j). A slice token z_j is the
        weight-averaged feature aggregated from all points belonging to that
        slice.
-    2. Self-attention among the M slice tokens. This is the O(M^2) part that
-       replaces standard O(N^2) point-wise attention.
+    2. Self-attention among the M slice tokens.
     3. Deslice. Each point's output is the weighted sum of the attended slice
        tokens, weighted by the same slice assignments from step 1.
 

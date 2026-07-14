@@ -335,8 +335,8 @@ def extract_training_tensors(
 
     Returns the 4 primitives Transolver will be trained to predict
     ((rho, u, v, T)), plus node coordinates (x, r). Pressure is omitted; it
-    is reconstructed at inference time as ``p = rho * R_specific * T``, by
-    project convention (CLAUDE.md, Phase 1 / Phase 4 output convention).
+    is reconstructed at inference time as ``p = rho * R_specific * T``, so
+    the equation of state holds exactly at the model output.
 
     Parameters
     ----------

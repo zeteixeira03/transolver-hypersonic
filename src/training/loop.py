@@ -1,5 +1,5 @@
 """
-Phase 1 training and evaluation loop for AirfRANS.
+Training and evaluation loop, first exercised on AirfRANS.
 
 Loss matches the upstream Transolver/AirfRANS recipe: MSE on volume points
 plus a configurable weight on MSE over surface points. Default weight 1.0
@@ -30,7 +30,7 @@ class TrainConfig:
     device: str = "cuda"
     log_every: int = 1
     val_every: int = 10
-    amp: bool = True  # mixed-precision on CUDA per CLAUDE.md default
+    amp: bool = True  # mixed-precision on CUDA
     grad_clip: float = 1.0  # global L2 grad-norm clip, disables if <= 0
 
 
@@ -65,7 +65,7 @@ def mse_weighted(
 def collate_single(batch: list[dict]) -> dict:
     """Collate for batch_size=1; just promote to (1, N, C)."""
     if len(batch) != 1:
-        raise NotImplementedError("Phase 1 uses batch_size=1; meshes have variable N.")
+        raise NotImplementedError("batch_size must be 1; meshes have variable N.")
     item = batch[0]
     return {
         "x": item["x"].unsqueeze(0),

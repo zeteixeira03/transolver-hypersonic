@@ -1,6 +1,6 @@
 """Compare SU2 single-case output against analytical hypersonic correlations.
 
-The three Phase 2 acceptance gates:
+The three acceptance gates:
 
 - Stagnation heat flux vs Fay-Riddell:       expect agreement within ~15%
 - Stagnation pressure vs Rayleigh-Pitot:     expect agreement within ~5%
@@ -11,8 +11,7 @@ cone-angle term; for blunt sphere-cones (large theta_c) the body is far blunter
 than a sphere of radius R_n and the shock genuinely stands off much farther than
 the correlation predicts. Above :data:`THETA_C_BILLIG_MAX` the standoff check is
 marked not-applicable: the SU2 value and the (invalid) Billig value are still
-reported, but the check is excluded from the pass/fail decision. See PHASE_LOG
-2026-06-24.
+reported, but the check is excluded from the pass/fail decision.
 
 :func:`compare_to_analytical` returns a structured summary that the validation
 script renders to console and persists to JSON alongside the run artifacts.

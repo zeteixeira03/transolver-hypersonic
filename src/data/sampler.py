@@ -1,4 +1,4 @@
-"""Phase 3 parameter sampler: a nested geometry x freestream DOE plus OOD slabs.
+"""Sweep parameter sampler: a nested geometry x freestream DOE plus OOD slabs.
 
 The training set is built as a nested Latin hypercube rather than a single joint
 LHS, for one practical reason: warm starting. A geometry change forces a remesh,
@@ -20,7 +20,7 @@ pairs are physical. Wall temperature is fixed at 300 K per project scope.
 
 On top of the core box, thin OOD slabs probe extrapolation: large and small nose
 radii, high cone angles, and Mach above the core ceiling. Each slab is its own
-small nested DOE, tagged so the Phase 4 OOD analysis can slice on it.
+small nested DOE, tagged so the OOD analysis can slice on it.
 """
 
 from __future__ import annotations
@@ -100,7 +100,7 @@ GEOM_BOX = {
     "R_s_ratio": (0.05,  0.30),    # R_s / R_b
 }
 FS_BOX = {
-    # altitude upper bound was 78 km in the first Phase 3 attempt. p_inf at 78 km
+    # altitude upper bound was 78 km in the first sweep attempt. p_inf at 78 km
     # is ~1.3 Pa; the laminar-NS recipe (validated at p_inf >= ~30 Pa in stage 2)
     # collapses the bow shock onto the body at those pressures, polluting the
     # cluster via warm restart. The 60 km cap gives p_inf >= ~22 Pa, the floor
@@ -227,7 +227,7 @@ def sample_cases(
     n_fs_ood: int = 2,
     seed: int = 0,
 ) -> list[CaseSpec]:
-    """Build the Phase 3 case list: a nested core DOE plus one per OOD slab.
+    """Build the sweep case list: a nested core DOE plus one per OOD slab.
 
     Parameters
     ----------

@@ -1,4 +1,4 @@
-"""Phase 4: train Transolver on the SU2 hypersonic dataset.
+"""Train Transolver on the SU2 hypersonic dataset.
 
 One script covers both the fine-tune-from-AirfRANS-pretrain and from-scratch
 baselines (toggle with ``--pretrain PATH`` or its absence). The slice-count
@@ -18,12 +18,12 @@ so unseen freestream conditions on seen shapes), ``test`` (family holdout:
 whole geometry clusters unseen in training), and the OOD slabs
 (extrapolation past the core parameter box).
 
-Deep ensembles (W2)
--------------------
+Deep ensembles
+--------------
 ``--init-seed`` decouples training stochasticity (model init, data order,
 node subsampling) from the split seed. Ensemble members share ``--seed``
-(identical splits and norm stats) and differ only in ``--init-seed``; the
-seed-0 W1 run at the chosen slice count is member #1.
+(identical splits and norm stats) and differ only in ``--init-seed``; a
+run trained without ``--init-seed`` counts as the init-seed-0 member.
 
 Eval-only mode
 --------------
@@ -388,7 +388,7 @@ def evaluate(
 # ============================================================================================
 
 def _parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Phase 4: train Transolver on SU2 hypersonic")
+    p = argparse.ArgumentParser(description="train Transolver on SU2 hypersonic")
     p.add_argument("--workdir", default="data/raw/phase3",
                    help="dataset workdir containing case_*/case.npz and ledger.db")
     p.add_argument("--out", required=True, help="output directory for checkpoints + logs")

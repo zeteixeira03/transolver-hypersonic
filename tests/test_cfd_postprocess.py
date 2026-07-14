@@ -215,7 +215,7 @@ def test_shock_standoff_handles_no_shock():
 def test_shock_standoff_collapsed_returns_nan():
     """Shock pinned within a few cells of the body endpoint: must be NaN'd.
 
-    This is the Phase 3 sharp-cone stall failure mode -- the second-order
+    This is the sweep's sharp-cone stall failure mode -- the second-order
     SU2 solve settles with the bow shock at x ~ -1 grid cell, behind which
     a 6000 K shock layer sits against a 300 K wall. Pre-fix, the threshold
     pick latched onto the second-to-last grid index and the standoff came

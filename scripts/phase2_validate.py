@@ -1,4 +1,4 @@
-"""Phase 2 single-case validation: canonical Mach 10 sphere-cone end-to-end.
+"""Single-case SU2 validation: canonical Mach 10 sphere-cone end-to-end.
 
 Pipeline: mesh (gmsh) -> render SU2 cfg -> run SU2_CFD -> parse outputs ->
 compare to Fay-Riddell / Rayleigh-Pitot / Billig -> emit acceptance figure
@@ -165,7 +165,7 @@ def make_acceptance_figure(
     ax.set_title("acceptance checks")
 
     fig.suptitle(
-        f"Phase 2 validation: M={case.mach}, R_n={case.R_n*1000:.1f} mm, "
+        f"Validation case: M={case.mach}, R_n={case.R_n*1000:.1f} mm, "
         f"theta_c={case.theta_c_deg} deg, T_inf={case.T_inf} K, p_inf={case.p_inf} Pa"
     )
     fig.tight_layout()
@@ -178,7 +178,7 @@ def make_acceptance_figure(
 # ============================================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="Phase 2 sphere-cone validation")
+    parser = argparse.ArgumentParser(description="canonical sphere-cone validation case")
     parser.add_argument("--run-dir", default="data/raw/phase2_validation",
                         help="output directory for run artifacts")
     parser.add_argument("--iter-pass1", type=int, default=3000,
@@ -343,7 +343,7 @@ def main():
     make_acceptance_figure(CANONICAL, surface, axis, summary, standoff, fig_path)
     print(f"[phase2] acceptance figure written to {fig_path}")
 
-    # ---- training-tensor extraction (smoke for Phase 3 readiness) ----
+    # ---- training-tensor extraction (smoke test for the dataset sweep) ----
     npz_path = run_dir / "case.npz"
     tensors = extract_training_tensors(result["volume_vtu"], save_npz=npz_path)
     print(f"[phase2] training tensors written to {npz_path} "

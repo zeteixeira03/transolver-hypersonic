@@ -1,5 +1,5 @@
 """
-AirfRANS dataset wrapper for Phase 1 stack validation.
+AirfRANS dataset wrapper for stack validation.
 
 The official `airfrans` pip package returns one numpy array per simulation of
 shape (N, 12) with the following column layout (verified against the package

@@ -107,7 +107,7 @@ def test_fay_riddell_reentry_regression():
 
 
 def test_fay_riddell_magnitude_band():
-    # CLAUDE.md says hypersonic wall heat flux is O(1-100) MW/m^2 at peak.
+    # hypersonic wall heat flux peaks at O(1-100) MW/m^2.
     # Spot-check a more aggressive case sits inside that band.
     q_w = fay_riddell_qw(M_inf=20.0, T_inf=250.0, p_inf=50.0, R_n=0.3, T_w=300.0)
     assert 1e5 < q_w < 1e8

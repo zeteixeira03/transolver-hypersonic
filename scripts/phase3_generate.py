@@ -1,9 +1,9 @@
-"""Phase 3 dataset generation pipeline.
+"""Dataset generation pipeline.
 
 One command, four stages, all resumable:
 
     1. preflight   -- check SU2 is callable and the Python deps import
-    2. validate    -- solve the Phase 2 canonical case with the Phase 3 settings
+    2. validate    -- solve the canonical validation case with the sweep settings
                       (loosened mesh, residual-driven convergence) and confirm it
                       still clears Fay-Riddell / Rayleigh-Pitot / Billig; write a
                       marker so this runs only once
@@ -68,11 +68,10 @@ from src.data.sampler import sample_cases
 from src.eval.sanity import compare_to_analytical, format_summary
 
 
-# stage-2 validation sample: 5 cases spanning corners of the Phase 3 design box.
-# Replaces the single canonical case used in the first Phase 3 attempt, which
-# silently validated only the regime closest to the Phase 2 acceptance recipe;
-# the recipe then stalled on most of the actual sweep (sharp cones, high Mach).
-# See PHASE_LOG entry 2026-05-14.
+# stage-2 validation sample: 5 cases spanning corners of the sweep design box.
+# Replaces a single canonical case, which silently validated only the regime
+# closest to the original acceptance recipe; that recipe then stalled on most
+# of the actual sweep (sharp cones, high Mach).
 def _stage2_case(R_n: float, theta_c: float, R_b_ratio: float, R_s_ratio: float,
                  mach: float, altitude_km: float | None,
                  T_inf: float | None = None, p_inf: float | None = None,
@@ -89,7 +88,7 @@ def _stage2_case(R_n: float, theta_c: float, R_b_ratio: float, R_s_ratio: float,
 
 
 # (name, case) -- order matters: the canonical case is first so a partial
-# run still informs whether the recipe regresses on the Phase 2 baseline.
+# run still informs whether the recipe regresses on the validated baseline.
 def _build_stage2_sample() -> list[tuple[str, Case]]:
     return [
         ("canonical",        _stage2_case(0.0254, 60.0, 3.0,  0.10, 10.0, None,
@@ -118,14 +117,14 @@ _PYTHON_DEPS = ("numpy", "scipy", "matplotlib", "pyvista", "gmsh")
 # ============================================================================================
 
 def phase3_mesh_kwargs(case: Case) -> dict:
-    """Phase 3 mesh: the Phase 2 canonical recipe, scaled with geometry.
+    """Sweep mesh: the canonical validation recipe, scaled with geometry.
 
     An earlier attempt loosened the boundary layer (ratio 1.2, first cell
     R_n/15000) for ~2x fewer cells; stage-2 validation showed it blows the
     Fay-Riddell heat-flux check (+127%) and smears the shock (standoff -27%).
-    The Phase 2 finding stands: the fine BL (ratio 1.15, first cell R_n/30000,
+    The single-case finding stands: the fine BL (ratio 1.15, first cell R_n/30000,
     0.06 R_n thick) is what puts the wall heat flux in tolerance, so it is kept.
-    The per-case speedup in Phase 3 comes from residual-driven convergence
+    The per-case speedup in the sweep comes from residual-driven convergence
     (stop at ``conv_minval`` instead of a fixed iteration count) and warm-starting
     within a geometry cluster, not from a coarser mesh.
     """
@@ -225,7 +224,7 @@ def solve_case(
         if res["returncode"] != 0:
             raise RuntimeError(f"SU2 pass2 failed rc={res['returncode']}; see {res['log']}")
 
-    # postprocess: off-axis stagnation extraction, same convention as Phase 2
+    # postprocess: off-axis stagnation extraction, same convention as the validation case
     R_n = case.R_n
     L_far = 8.0 * case.R_b
     surface = extract_surface(res["surface_vtu"])
@@ -301,7 +300,7 @@ WARMUP_CASES = 30  # do not enforce the stop rule until this many cases have fin
 # outside any plausible systematic postprocess bias (the p02 plateau median runs
 # ~5-10% low on healthy cases, the sd finder ~10-15% low) and cleanly separate
 # the "shock collapsed onto body" cluster (qw +100 to +600%, p02 -50 to -95%,
-# sd -45 to -80%) seen in the first Phase 3 attempt.
+# sd -45 to -80%) seen in the first sweep attempt.
 _CATASTROPHIC = {
     "qw_rel_max":  0.50,    # qw rel err > +50% means the BL solution diverged
     "p02_rel_min": -0.25,   # p02 rel err < -25% means the post-shock plateau collapsed
@@ -361,7 +360,7 @@ def run_quality_gate(db_path: Path, workdir: Path, window: int) -> tuple[bool, s
             ax.set_ylabel("rel error")
             ax.set_title(_GATE_TITLES[k], fontsize=9)
         fig.suptitle(
-            f"Phase 3 quality gate: last {len(rows)} of {done} done "
+            f"Quality gate: last {len(rows)} of {done} done "
             f"({passed}/{len(rows)} clear all 3; run success {rate*100:.0f}%)"
         )
         fig.tight_layout()
@@ -436,18 +435,18 @@ def preflight(args: argparse.Namespace) -> tuple[bool, str]:
 # ============================================================================================
 
 def validate_sample(args: argparse.Namespace) -> bool:
-    """Solve the 5-case diverse stage-2 sample with the Phase 3 settings.
+    """Solve the 5-case diverse stage-2 sample with the sweep settings.
 
-    The first Phase 3 attempt validated only the canonical case (theta_c=60,
-    M=10), which sits in the regime where the Phase 2 acceptance recipe was
+    The first sweep attempt validated only the canonical case (theta_c=60,
+    M=10), which sits in the regime where the original acceptance recipe was
     tuned. The recipe cleared that case but stalled on most of the sweep --
     sharp cones (theta_c < 50) and high Mach (M > 18) with the bow shock
     collapsed onto the body. Validating on a diverse stage-2 sample catches
     those failure modes before any sweep cycles are burned.
 
     The five cases (see :func:`_build_stage2_sample`) span the corners:
-    canonical (blunt + low-M, Phase 2 baseline), sharp+low-M, blunt+high-M,
-    small-nose+mid-M, and the sharp+high-M anchor (Phase 3 sampler[0]). Each
+    canonical (blunt + low-M baseline), sharp+low-M, blunt+high-M,
+    small-nose+mid-M, and the sharp+high-M anchor (sampler[0]). Each
     must complete without an exception. Gate misses are logged but do not
     block the sweep -- the per-case tolerances in
     :mod:`src.eval.sanity` are 5/15/20% against approximate analytical
@@ -491,7 +490,7 @@ def validate_sample(args: argparse.Namespace) -> bool:
         if valdir.exists():
             shutil.rmtree(valdir)
     n = len(sample)
-    print(f"[validate] solving {n} stage-2 cases with the Phase 3 settings "
+    print(f"[validate] solving {n} stage-2 cases with the sweep settings "
           f"(iter_pass1={args.iter_pass1}, iter_pass2={args.iter_pass2}, "
           f"mglevel={args.mglevel}); ~3h wall-clock per case in sequence, "
           f"~{n*3}h total. Skip with --no-validate.")
@@ -588,7 +587,7 @@ def worker_loop(args: argparse.Namespace, worker_id: str, stop_flag) -> None:
         # AND cleared the three analytical gates. a "done OUT-OF-TOL" predecessor
         # is a collapsed-shock solution; warm-starting from it propagates the
         # collapsed field through the geometry cluster (see analyze_gates2: 38/39
-        # broken cases were warm-started in the first Phase 3 attempt)
+        # broken cases were warm-started in the first sweep attempt)
         restart_src = None
         if restart_from is not None:
             prev = L.case_row(db_path, int(restart_from))
@@ -709,7 +708,7 @@ def package_dataset(args: argparse.Namespace) -> None:
 # ============================================================================================
 
 def _build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(description="Phase 3 dataset generation pipeline")
+    p = argparse.ArgumentParser(description="dataset generation pipeline")
     p.add_argument("--workdir", default="data/raw/phase3", help="artifact root (one subdir per case)")
     p.add_argument("--db", default=None, help="ledger path (default <workdir>/ledger.db)")
     p.add_argument("--workers", type=int, default=4, help="worker processes")
@@ -722,14 +721,13 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--n-blocks", type=int, default=4, help="contiguous ledger blocks")
     p.add_argument("--seed", type=int, default=0, help="LHS seed")
     # solver knobs
-    # the 2500 + 8000 / mglevel=0 Phase 2 acceptance recipe clears the canonical
-    # case but stalls at rms ~ -4.77 with the bow shock collapsed onto the body
-    # for sharp cones and high-Mach geometries (PHASE_LOG 2026-05-13). Geometric
+    # the 2500 + 8000 / mglevel=0 single-case validation recipe clears the
+    # canonical case but stalls at rms ~ -4.77 with the bow shock collapsed
+    # onto the body for sharp cones and high-Mach geometries. Geometric
     # multigrid (mglevel=2) breaks the saddle: pass 2 then settles to rms ~ -6
     # with the shock at a physically correct standoff. CD plateaus by ~iter
     # 12-14k, so iter_pass2=16000 covers the slow drift; the diverse stage-2
-    # sample confirms the recipe across blunt/sharp x lo/hi Mach corners
-    # (PHASE_LOG 2026-05-14).
+    # sample confirms the recipe across blunt/sharp x lo/hi Mach corners.
     p.add_argument("--iter-pass1", type=int, default=2500, help="first-order startup iterations")
     p.add_argument("--iter-pass2", type=int, default=16000, help="second-order iterations")
     p.add_argument("--conv-minval", type=float, default=-8.0,
@@ -738,7 +736,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--cfl-max", type=float, default=5.0)
     p.add_argument("--mglevel", type=int, default=2,
                    help="geometric multigrid levels (0=off). Default 2 is what breaks the "
-                        "sharp-cone / high-Mach saddle that stalled the first Phase 3 attempt")
+                        "sharp-cone / high-Mach saddle that stalled the first sweep attempt")
     p.add_argument("--case-timeout-s", type=float, default=0.0, help="per-SU2-call wall-clock cap (0=none)")
     # housekeeping
     p.add_argument("--quality-every", type=int, default=50, help="run the quality gate every N finished cases")

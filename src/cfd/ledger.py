@@ -1,4 +1,4 @@
-"""SQLite work ledger for Phase 3 dataset generation.
+"""SQLite work ledger for dataset generation.
 
 One row per attempted case. A worker claims the lowest-ordinal ``pending`` row
 in an atomic transaction, runs it, and writes back ``done`` (with the three

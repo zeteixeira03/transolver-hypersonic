@@ -15,7 +15,7 @@ run directory and produces:
 
 The runner can invoke SU2_CFD natively (Linux/Mac, when SU2_CFD is on PATH)
 or via WSL by setting ``wsl_distro`` and ``conda_env``. The Windows-host
-development workflow is WSL+conda; production Phase 3 generation on Kaggle
+development workflow is WSL+conda; production dataset generation on Kaggle
 runs Linux natively.
 """
 

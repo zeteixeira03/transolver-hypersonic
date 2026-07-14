@@ -1,4 +1,4 @@
-"""Unit tests for the Phase 3 sampler and SQLite ledger. No SU2 run required."""
+"""Unit tests for the sweep sampler and SQLite ledger. No SU2 run required."""
 
 from __future__ import annotations
 
@@ -171,7 +171,7 @@ def test_init_ledger_rows_and_restart_links(tmp_path):
 def test_init_ledger_is_idempotent(tmp_path):
     db, specs = _tiny_ledger(tmp_path)
     # claim and finish one case, then re-init: the finished row must survive
-    cid, case, _ = L.claim_next(db, "w0")
+    cid, case, _ = L.claim_next(db, "worker_a")
     L.mark_done(db, cid, qw=1.0, p02=2.0, standoff=3e-3, checks_passed=True)
     L.init_ledger(db, specs, n_blocks=2)
     counts = L.status_counts(db)
@@ -181,9 +181,9 @@ def test_init_ledger_is_idempotent(tmp_path):
 
 def test_claim_mark_and_recover(tmp_path):
     db, specs = _tiny_ledger(tmp_path)
-    cid1, case1, rf1 = L.claim_next(db, "w0")
+    cid1, case1, rf1 = L.claim_next(db, "worker_a")
     assert cid1 == 0 and rf1 is None and isinstance(case1, Case)
-    cid2, _, _ = L.claim_next(db, "w1")
+    cid2, _, _ = L.claim_next(db, "worker_b")
     assert cid2 == 1  # next by ord
     L.mark_done(db, cid1, qw=1.0, p02=2.0, standoff=3e-3, checks_passed=True)
     L.mark_failed(db, cid2, "boom")
@@ -197,14 +197,14 @@ def test_claim_mark_and_recover(tmp_path):
 def test_reclaim_stale(tmp_path):
     db, specs = _tiny_ledger(tmp_path, n_geom=1, n_fs=1, n_blocks=1)
     assert len(specs) == 1
-    cid, _, _ = L.claim_next(db, "w0")
+    cid, _, _ = L.claim_next(db, "worker_a")
     # nothing is stale with a long lease
     assert L.reclaim_stale(db, max_age_s=1e9) == 0
     # a zero lease reclaims the running row back to pending (attempts 1 < MAX_ATTEMPTS)
     assert L.reclaim_stale(db, max_age_s=0.0) == 1
     assert L.status_counts(db) == {"pending": 1}
     # claim again to reach MAX_ATTEMPTS, then expiring the lease marks it failed
-    L.claim_next(db, "w0")
+    L.claim_next(db, "worker_a")
     assert L.reclaim_stale(db, max_age_s=0.0) == 1
     con = L.connect(db)
     try:

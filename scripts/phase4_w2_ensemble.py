@@ -1,8 +1,8 @@
-"""W2 deep-ensemble UQ: spread calibration and the trust/warn/refuse rule.
+"""Deep-ensemble UQ: spread calibration and the trust/warn/refuse rule.
 
 Consumes K sibling run dirs from ``scripts/phase4_train_su2.py`` trained
 with the same ``--seed`` and slice count but different ``--init-seed``
-(the W1 seed-0 run at the chosen M is member #1). Two stages:
+(the init-seed-0 run at the chosen M counts as one member). Two stages:
 
 1. Inference: rebuilds the shared splits, runs every member on every
    eval-tier case (val included, it calibrates the thresholds) and writes
@@ -16,7 +16,7 @@ with the same ``--seed`` and slice count but different ``--init-seed``
    rank correlation per tier plus a binned-median figure), and the
    trust/warn/refuse decision table.
 
-Decision rule: refuse when the input fails the W1 envelope guard
+Decision rule: refuse when the input fails the envelope guard
 (distance > ``--guard-dist`` or Kn > 0.01) or spread exceeds the refuse
 threshold; warn when spread exceeds the warn threshold; trust otherwise.
 Default thresholds derive from the val-split spread distribution (p90 and
@@ -283,7 +283,7 @@ def calibration_figure(recs: list[dict], fig_out: Path,
 # ============================================================================================
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="W2 deep-ensemble UQ + trust/warn/refuse")
+    p = argparse.ArgumentParser(description="deep-ensemble UQ + trust/warn/refuse")
     p.add_argument("runs", nargs="*",
                    help="member run dirs (same --seed and M, different --init-seed)")
     p.add_argument("--workdir", default="data/raw/kaggle_su2_stage",
@@ -292,7 +292,7 @@ def main() -> None:
     p.add_argument("--per-case", default=None, metavar="JSON",
                    help="skip inference; analyze an existing ensemble_per_case.json")
     p.add_argument("--guard-dist", type=float, default=0.038,
-                   help="W1 envelope guard threshold on box exceedance")
+                   help="envelope guard threshold on box exceedance")
     p.add_argument("--warn-spread", type=float, default=None,
                    help="spread above which the decision is warn (default: val p90)")
     p.add_argument("--refuse-spread", type=float, default=None,

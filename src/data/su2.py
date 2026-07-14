@@ -1,5 +1,5 @@
 """
-SU2 hypersonic dataset for the Phase 4 transfer-learning study.
+SU2 hypersonic sphere-cone dataset for surrogate training.
 
 Each training case is one converged SU2 axisymmetric sphere-cone simulation,
 stored as a compressed .npz produced by
@@ -10,7 +10,7 @@ stored as a compressed .npz produced by
     case_params                     -- 8 case parameters, shape (8,)
 
 Pressure is not stored; it is reconstructed at inference time as
-``p = rho * R_specific * T`` per the CLAUDE.md output convention.
+``p = rho * R_specific * T``, so the equation of state holds exactly.
 
 Inputs to the model are per-node and stack as
 
@@ -330,9 +330,9 @@ def reconstruct_pressure(rho: torch.Tensor, T: torch.Tensor) -> torch.Tensor:
     """Pressure from the ideal-gas equation of state, ``p = rho R_specific T``.
 
     The model predicts ``(rho, u, v, T)`` and ``p`` is reconstructed at
-    output time. This is the hard architectural constraint from CLAUDE.md;
-    the EoS holds exactly at inference, the network has no degree of
-    freedom to violate it.
+    output time. This is a hard architectural constraint; the EoS holds
+    exactly at inference and the network has no degree of freedom to
+    violate it.
     """
     return rho * R_SPECIFIC_AIR * T
 

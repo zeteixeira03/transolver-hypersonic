@@ -1,5 +1,5 @@
 """
-Phase 1 acceptance figure: predicted vs ground-truth flow on one held-out
+AirfRANS acceptance figure: predicted vs ground-truth flow on one held-out
 airfoil. Two panels: surface Cp(x) on the left, |U| field on the right.
 
 Pressure in AirfRANS is stored as p / specific_mass (m^2/s^2). The
@@ -65,7 +65,7 @@ def plot_acceptance(
     save_path: Path | str | None = None,
 ) -> tuple[plt.Figure, dict[str, float]]:
     """
-    Build the Phase 1 two-panel acceptance figure for one held-out
+    Build the two-panel AirfRANS acceptance figure for one held-out
     simulation. Returns the figure and a dict of relative-L2 metrics shown
     in the panel titles.
     """
