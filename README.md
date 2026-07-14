@@ -26,7 +26,7 @@ runs are in progress. Quantitative results are held back until the remaining
 out-of-distribution cases land and every checkpoint is rescored against the
 complete set; partial numbers on a moving dataset would not mean much.
 
-## The two questions
+## Evaluation questions
 
 1. **Slice-count ablation.** Transolver's Physics-Attention assigns each mesh
    point to one of M learned slices and attends across slice tokens, O(M^2)
@@ -92,7 +92,7 @@ The driver writes mesh, two-stage cfg, SU2 logs, the volume and surface
 VTUs, a comparison figure, a JSON summary, and the training tensor to
 `data/raw/phase2_validation/`.
 
-## The dataset
+## Dataset generation
 
 `scripts/phase3_generate.py` sweeps the design box: geometry parameters
 (R_n, theta_c, R_b, R_s) and freestream conditions (Mach, T_inf, p_inf via
