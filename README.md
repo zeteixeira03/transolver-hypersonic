@@ -21,10 +21,14 @@ sweep are still filling in.
 On the modeling side, a first Transolver trained on the dataset reproduces
 held-out flow fields (`data/samples/phase4_w0_field.png` shows predicted vs
 SU2 primitives on an unseen case), a slice-count ablation across
-M in {8, 16, 32, 64} has run, and deep-ensemble uncertainty quantification
-runs are in progress. Quantitative results are held back until the remaining
-out-of-distribution cases land and every checkpoint is rescored against the
-complete set; partial numbers on a moving dataset would not mean much.
+M in {8, 16, 32, 64} has run, and a five-member deep ensemble at the best
+slice count is trained. Ensemble spread tracks per-case error closely enough
+to drive a trust/warn/refuse rule, layered with an input-space envelope
+guard that flags inputs outside the training box
+(`data/samples/phase4_w2_calibration.png`). Quantitative results are held
+back until the remaining out-of-distribution cases land and every checkpoint
+is rescored against the complete set; partial numbers on a moving dataset
+would not mean much.
 
 ## Evaluation questions
 
