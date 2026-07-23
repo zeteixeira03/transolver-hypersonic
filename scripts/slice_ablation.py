@@ -1,7 +1,7 @@
 """Slice-count ablation tables and the envelope-distance figure.
 
 Consumes the ``final_eval.json`` + ``per_case_eval.json`` pairs written by
-``scripts/phase4_train_su2.py`` (one run dir per slice count) and emits:
+``scripts/train.py`` (one run dir per slice count) and emits:
 
 1. the ablation table, mean rel-L2 per tier as a function of slice count M,
    with the per-tier optimum flagged (does the best M shift core vs OOD?)
@@ -19,8 +19,8 @@ ground truth itself).
 
 Usage
 -----
-    python scripts/phase4_w1_analysis.py data/processed/w1/run_m* \
-        --fig-out data/samples/phase4_w1_envelope.png
+    python scripts/slice_ablation.py data/processed/ablation/run_m* \
+        --fig-out data/samples/envelope_distance.png
 """
 
 from __future__ import annotations
@@ -238,7 +238,7 @@ def envelope_figure(run: dict, fig_out: Path, guard_factor: float = 2.0) -> floa
 def main() -> None:
     p = argparse.ArgumentParser(description="slice-count ablation + envelope analysis")
     p.add_argument("runs", nargs="+", help="run dirs, one per slice count")
-    p.add_argument("--fig-out", default="data/samples/phase4_w1_envelope.png")
+    p.add_argument("--fig-out", default="data/samples/envelope_distance.png")
     p.add_argument("--envelope-m", type=int, default=None,
                    help="slice count for the tier table + figure (default: best family-holdout)")
     p.add_argument("--guard-factor", type=float, default=2.0)

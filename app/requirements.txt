@@ -1,0 +1,7 @@
+# CPU-only torch keeps the Space image small on the free tier
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch>=2.2
+streamlit>=1.40
+numpy>=1.26
+matplotlib>=3.8
+gmsh>=4.12

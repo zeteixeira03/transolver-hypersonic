@@ -154,8 +154,14 @@ def split_paths(
     conditions on shapes the model trained on. The geometry shuffle happens
     before the interp draw, so val/test geometry assignment for a given
     seed is unchanged by ``interp_frac``.
+
+    Cases with ``group_name == 'loop'`` (active-learning acquired cases)
+    are force-routed to ``train`` and never enter val/test/interp. They
+    are also excluded from the geometry-shuffle input, so adding or
+    removing loop cases leaves the core val/test/interp membership
+    byte-identical for the same seed.
     """
-    by_group: dict[str, list[Path]] = {"core": [], **{g: [] for g in OOD_GROUPS}}
+    by_group: dict[str, list[Path]] = {"core": [], "loop": [], **{g: [] for g in OOD_GROUPS}}
     for p in paths:
         cid = case_id_from_path(p)
         if cid not in groups:
@@ -163,6 +169,7 @@ def split_paths(
         by_group.setdefault(groups[cid], []).append(p)
 
     core_paths = by_group.pop("core")
+    loop_paths = by_group.pop("loop", [])
     core_by_geom: dict[int, list[Path]] = {}
     for p in core_paths:
         gid = geom_ids[case_id_from_path(p)]
@@ -186,6 +193,9 @@ def split_paths(
         interp_set = set(pick.tolist())
         interp_paths = [p for i, p in enumerate(train_paths) if i in interp_set]
         train_paths = [p for i, p in enumerate(train_paths) if i not in interp_set]
+
+    # loop cases append after the core train, deterministic in case_id order
+    train_paths = train_paths + sorted(loop_paths, key=case_id_from_path)
 
     splits = {
         "train": train_paths,
@@ -392,7 +402,7 @@ def evaluate(
 
 def _parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="train Transolver on SU2 hypersonic")
-    p.add_argument("--workdir", default="data/raw/phase3",
+    p.add_argument("--workdir", default="data/raw/sweep",
                    help="dataset workdir containing case_*/case.npz and ledger.db")
     p.add_argument("--out", required=True, help="output directory for checkpoints + logs")
     p.add_argument("--pretrain", default=None,
@@ -413,6 +423,12 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--eval-only", default=None, metavar="RUNDIR",
                    help="skip training; evaluate RUNDIR/best.pt with RUNDIR/norm_stats.pt "
                         "on all tiers and write results to --out")
+    p.add_argument("--pinned-splits", default=None, metavar="JSON",
+                   help="JSON of {split_name: [case_name, ...]} that overrides the "
+                        "auto-computed splits for the tiers it lists; tiers absent from "
+                        "the JSON keep their auto-computed membership. Use to reproduce "
+                        "the exact core val/test/interp used by a prior run when "
+                        "rescoring the same checkpoint against a refreshed dataset.")
     p.add_argument("--seed", type=int, default=0,
                    help="split seed; also seeds training RNGs unless --init-seed is given")
     p.add_argument("--init-seed", type=int, default=None,
@@ -445,6 +461,19 @@ def main() -> None:
     geom_ids = load_case_geom_ids(ledger)
     splits = split_paths(paths, groups, geom_ids, args.val_frac, args.test_frac,
                          args.seed, args.interp_frac)
+    if args.pinned_splits is not None:
+        pinned = json.loads(Path(args.pinned_splits).read_text())
+        def _cn(p: Path) -> str:
+            return p.parent.name if p.name == "case.npz" else p.stem
+        by_name = {_cn(p): p for p in paths}
+        for split_name, names in pinned.items():
+            resolved = [by_name[n] for n in names if n in by_name]
+            missing = [n for n in names if n not in by_name]
+            if missing:
+                print(f"[pinned] {split_name}: {len(missing)} case(s) not present in "
+                      f"workdir; dropping ({missing[:5]}{' ...' if len(missing) > 5 else ''})")
+            splits[split_name] = resolved
+        print(f"[pinned] applied {len(pinned)} pinned split(s) from {args.pinned_splits}")
     for name, ps in splits.items():
         print(f"[split] {name}: {len(ps)} cases")
 
@@ -540,9 +569,16 @@ def main() -> None:
         final[split_name], per_case_all[split_name] = evaluate(model, ds, stats, args.device)
         print(f"[final] {split_name}: {final[split_name]}")
 
+    # in eval-only mode, args.slice_num / n_hidden / n_layers / n_head reflect the
+    # CLI defaults, not the model that actually ran; overlay from run_args so the
+    # provenance record matches the loaded checkpoint
+    args_out = dict(vars(args))
+    if args.eval_only is not None:
+        for k in ("slice_num", "n_hidden", "n_layers", "n_head"):
+            args_out[k] = run_args[k]
     (out / "final_eval.json").write_text(json.dumps({
         "splits": {k: len(v) for k, v in splits.items()},
-        "args": vars(args),
+        "args": args_out,
         "pretrain_info": pretrain_info,
         "best_val_mean_rL2": best_val,
         "train_envelope": train_envelope,

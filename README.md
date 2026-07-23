@@ -5,30 +5,22 @@ re-entry capsules in hypersonic flight. Architecture is Transolver (Wu et al.,
 ICML 2024, [arXiv:2402.02366](https://arxiv.org/abs/2402.02366)); ground truth
 is SU2 axisymmetric laminar Navier-Stokes.
 
-Work in progress. The pipeline is validated and most of the dataset is
-generated; training experiments are underway and results will appear here
-once they firm up.
+Work in progress. The pipeline is validated, the sweep is complete, and a
+slice-count ablation plus a calibrated deep ensemble are in (results below).
 
 ## Where things stand
 
 The stack was validated end-to-end on AirfRANS first, then the SU2 pipeline
 on a canonical case against three analytical correlations (both below). A
-sweep over the sphere-cone design space has produced roughly 550 converged
-cases so far: a core box plus out-of-distribution slabs at extreme nose
-radii, extreme cone half-angles, and Mach above 25. The last corners of the
-sweep are still filling in.
+sweep over the sphere-cone design space has produced 727 converged cases: a
+core box of 667 cases plus out-of-distribution slabs at large and small nose
+radius, high cone half-angle, and Mach above 25.
 
-On the modeling side, a first Transolver trained on the dataset reproduces
-held-out flow fields (`data/samples/phase4_w0_field.png` shows predicted vs
-SU2 primitives on an unseen case), a slice-count ablation across
-M in {8, 16, 32, 64} has run, and a five-member deep ensemble at the best
-slice count is trained. Ensemble spread tracks per-case error closely enough
-to drive a trust/warn/refuse rule, layered with an input-space envelope
-guard that flags inputs outside the training box
-(`data/samples/phase4_w2_calibration.png`). Quantitative results are held
-back until the remaining out-of-distribution cases land and every checkpoint
-is rescored against the complete set; partial numbers on a moving dataset
-would not mean much.
+On the modeling side, a first Transolver reproduces held-out flow fields
+(`data/samples/field_prediction.png` shows predicted vs SU2 primitives on an
+unseen case). A slice-count ablation and a five-member deep ensemble with
+calibrated uncertainty follow; both are in the results below, evaluated
+against every out-of-distribution slab including the high-Mach one.
 
 ## Evaluation questions
 
@@ -41,6 +33,89 @@ would not mean much.
    extreme nose radii, extreme cone half-angles, and Mach above the training
    range. Where does the surrogate degrade, and can that boundary be
    detected from the inputs alone?
+
+## Results
+
+Numbers below are on the full sweep: 727 converged cases (667 core plus
+out-of-distribution slabs at large nose radius, small nose radius, high cone
+angle, and Mach above 25). Every OOD slab, including the high-Mach one, is
+now evaluated. Relative L2 is per-channel, in physical units after
+de-normalization, then averaged over the four primitives.
+
+### Slice-count ablation
+
+Mean relative L2 per evaluation tier, sweeping the slice count M (best per
+column in bold):
+
+| M  | interpolation | family holdout | cone_high | mach_high | nose_large | nose_small | OOD pooled |
+|----|------|------|------|------|------|------|------|
+| 8  | 0.121 | 0.129 | 0.428 | 0.215 | 0.344 | **0.257** | 0.313 |
+| 16 | 0.105 | 0.117 | 0.343 | 0.194 | 0.300 | 0.295 | 0.278 |
+| 32 | **0.100** | **0.104** | 0.337 | **0.189** | 0.292 | 0.277 | 0.270 |
+| 64 | 0.108 | 0.111 | **0.307** | 0.202 | **0.269** | 0.286 | **0.260** |
+
+The optimum slice count still shifts with the evaluation regime, and adding
+the Mach-above-25 slab does not change the direction: M=32 is best
+in-distribution (interpolation and family holdout); M=64 is best on the
+pooled out-of-distribution metric and on most individual OOD slabs.
+Mach extrapolation is the one slab where more slices stop helping past
+M=32; every other slab keeps improving through M=64. More slices generally
+help extrapolation after they stop helping interpolation: the
+Physics-Attention bottleneck binds hardest where the flow leaves the
+training box. Dropping below 16 slices costs accuracy everywhere.
+
+Within the box, geometry generalization is nearly free. At M=32 the family
+holdout, whole geometry clusters unseen in training (0.104), is barely harder
+than freestream interpolation on seen shapes (0.100). The 3x error jump is at
+the envelope boundary, not between geometry tiers. The
+error-vs-envelope-distance figure (`data/samples/envelope_distance.png`)
+puts a threshold on it: binned median error doubles about 7% outside the
+box, which becomes the geometric half of the decision rule below. That
+threshold moved from an earlier estimate of 4% once the high-Mach and
+larger cone_high slabs were added; the boundary is real but its exact
+location depends on how much of the extrapolation region has been sampled.
+
+### Uncertainty and the trust/warn/refuse rule
+
+Five Transolvers at M=32, identical splits and data, differing only in
+initialization and data order (a deep ensemble). The ensemble mean is the
+prediction, the spread across members is the uncertainty. Averaging beats the
+best single member in-distribution and on the high-Mach slab:
+
+| tier | ensemble | best single member | mean spread |
+|------|------|------|------|
+| interpolation    | 0.091 | 0.100 | 0.068 |
+| family holdout   | 0.092 | 0.104 | 0.073 |
+| cone_high (OOD)  | 0.296 | 0.288 | 0.176 |
+| mach_high (OOD)  | 0.180 | 0.189 | 0.114 |
+| nose_large (OOD) | 0.255 | 0.251 | 0.158 |
+| nose_small (OOD) | 0.218 | 0.241 | 0.146 |
+
+On cone_high and nose_large the ensemble mean stays within noise of the best
+single member, same as before; the ensemble's clear wins are in-distribution
+and now also on mach_high.
+
+Spread tracks actual error: the rank correlation between per-case spread and
+per-case error is 0.94 pooled over all evaluation tiers, 0.86 on each
+in-distribution tier, 0.76-0.82 per OOD slab. Spread is a usable error proxy
+that needs no ground truth (`data/samples/spread_calibration.png`).
+
+That gives an operational rule for whether to trust a prediction. Refuse if
+the input falls outside the training envelope (box exceedance, or Knudsen
+number past the continuum limit) or the ensemble disagrees strongly; warn at
+moderate spread; trust otherwise. Over the evaluation cases:
+
+| decision | cases | median error | p90 error |
+|------|------|------|------|
+| trust  | 86 | 0.085 | 0.129 |
+| warn   | 10 | 0.182 | 0.218 |
+| refuse | 52 | 0.219 | 0.404 |
+
+The buckets order cleanly by actual error. The honest limitation: spread
+cannot catch a consensus error. One in-box case sits at 0.40 error with low
+spread because all five members share the same systematic miss, so they agree
+with each other. Ensemble disagreement measures epistemic uncertainty, not a
+shared blind spot.
 
 ## Validating the stack on AirfRANS
 
@@ -57,7 +132,7 @@ Per-channel relative L2 on the test split:
 | nu_t          | 0.102  |
 | p on surface  | 0.072  |
 
-The figure is `data/samples/phase1_acceptance.png`. The point was never to
+The figure is `data/samples/airfrans_validation.png`. The point was never to
 compete with the published AirfRANS Transolver, only to confirm that the
 vendored Physics-Attention, training loop, and evaluation path function
 end-to-end on a free-tier GPU before pointing them at the SU2 data.
@@ -82,23 +157,23 @@ nodes, 61 min wall-clock total.
 | shock standoff        | 4.27 mm      | 3.75 mm (Billig)           | +13.79% | 20% |
 
 All three clear their stated tolerances. The figure is at
-`data/samples/phase2_acceptance.png`; one full converged-case tensor
-(`x, r, rho, u, v, T` per mesh node) is at `data/samples/phase2_canonical.npz`.
+`data/samples/cfd_validation.png`; one full converged-case tensor
+(`x, r, rho, u, v, T` per mesh node) is at `data/samples/canonical_case.npz`.
 
 To reproduce, on Linux or WSL with SU2 v8.5 on PATH and `pyvista`, `gmsh`,
 `matplotlib`, `numpy` available:
 
 ```bash
-python scripts/phase2_validate.py --iter-pass1 2500 --iter-pass2 8000
+python scripts/validate_cfd.py --iter-pass1 2500 --iter-pass2 8000
 ```
 
 The driver writes mesh, two-stage cfg, SU2 logs, the volume and surface
 VTUs, a comparison figure, a JSON summary, and the training tensor to
-`data/raw/phase2_validation/`.
+`data/raw/cfd_validation/`.
 
 ## Dataset generation
 
-`scripts/phase3_generate.py` sweeps the design box: geometry parameters
+`scripts/generate_dataset.py` sweeps the design box: geometry parameters
 (R_n, theta_c, R_b, R_s) and freestream conditions (Mach, T_inf, p_inf via
 altitude) sampled by Latin hypercube over a core box, plus dedicated slabs
 past each box edge for out-of-distribution evaluation. Each case runs the
@@ -148,11 +223,11 @@ src/
 configs/
   sphere_cone_template.cfg # SU2 axisymmetric laminar NS template
 scripts/
-  phase2_validate.py       # single-case SU2 validation driver
-  phase3_generate.py       # resumable dataset sweep runner
-  phase4_train_su2.py      # training CLI (slice sweep, ensembles, eval-only)
-  phase4_w1_analysis.py    # ablation tables + envelope-distance figure
-  phase4_w2_ensemble.py    # deep-ensemble UQ and trust/warn/refuse
+  validate_cfd.py          # single-case SU2 validation driver
+  generate_dataset.py      # resumable dataset sweep runner
+  train.py                 # training CLI (slice sweep, ensembles, eval-only)
+  slice_ablation.py        # ablation tables + envelope-distance figure
+  ensemble_uq.py           # deep-ensemble UQ and trust/warn/refuse
 notebooks/
   01_validate_stack.ipynb  # AirfRANS validation, Kaggle orchestrator
   02_train_su2.ipynb       # SU2 training runs, Kaggle orchestrator

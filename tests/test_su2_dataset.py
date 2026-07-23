@@ -4,7 +4,7 @@ The synthetic-NPZ tests cover schema, normalization, lazy loading, and the
 reconstruct-pressure helper without depending on any committed sample. The
 canonical-NPZ regression check verifies that
 :func:`src.eval.sanity.compute_q_w_from_T` reproduces the canonical-case SU2
-stagnation heat flux to within 5% on the committed ``phase2_canonical.npz``,
+stagnation heat flux to within 5% on the committed ``canonical_case.npz``,
 which is the load-bearing check for the surrogate eval metric.
 """
 
@@ -268,9 +268,9 @@ def test_compute_q_w_on_canonical_sample():
     check for the surrogate evaluation pipeline: if the recovery on ground
     truth drifts, every reported surrogate q_w error is suspect.
     """
-    p = Path("data/samples/phase2_canonical.npz")
+    p = Path("data/samples/canonical_case.npz")
     if not p.exists():
-        pytest.skip(f"{p} not present; regenerate via scripts/phase2_validate.py")
+        pytest.skip(f"{p} not present; regenerate via scripts/validate_cfd.py")
     d = np.load(p)
     T_w = float(d["case_params"][CASE_PARAM_ORDER.index("T_w")])
     R_n = float(d["case_params"][CASE_PARAM_ORDER.index("R_n")])

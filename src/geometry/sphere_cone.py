@@ -172,7 +172,10 @@ def mesh_sphere_cone(
 
     import gmsh  # imported lazily; not needed by sphere_cone_points
 
-    gmsh.initialize()
+    # interruptible=False skips gmsh's SIGINT handler, which requires the main
+    # thread; without it meshing raises when called from a worker thread (e.g.
+    # the Streamlit dashboard)
+    gmsh.initialize(interruptible=False)
     try:
         gmsh.option.setNumber("General.Terminal", 0)
         gmsh.model.add("sphere_cone")

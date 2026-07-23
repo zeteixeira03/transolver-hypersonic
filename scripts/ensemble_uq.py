@@ -1,6 +1,6 @@
 """Deep-ensemble UQ: spread calibration and the trust/warn/refuse rule.
 
-Consumes K sibling run dirs from ``scripts/phase4_train_su2.py`` trained
+Consumes K sibling run dirs from ``scripts/train.py`` trained
 with the same ``--seed`` and slice count but different ``--init-seed``
 (the init-seed-0 run at the chosen M counts as one member). Two stages:
 
@@ -25,13 +25,13 @@ Default thresholds derive from the val-split spread distribution (p90 and
 
 Usage
 -----
-    python scripts/phase4_w2_ensemble.py data/processed/w1/run_m32 \
-        data/processed/w2/run_m32_s1 data/processed/w2/run_m32_s2 \
-        data/processed/w2/run_m32_s3 data/processed/w2/run_m32_s4 \
-        --workdir data/raw/kaggle_su2_stage --out data/processed/w2
+    python scripts/ensemble_uq.py data/processed/ablation/run_m32 \
+        data/processed/ensemble/run_m32_s1 data/processed/ensemble/run_m32_s2 \
+        data/processed/ensemble/run_m32_s3 data/processed/ensemble/run_m32_s4 \
+        --workdir data/raw/kaggle_su2_stage --out data/processed/ensemble
 
-    python scripts/phase4_w2_ensemble.py \
-        --per-case data/processed/w2/ensemble_per_case.json
+    python scripts/ensemble_uq.py \
+        --per-case data/processed/ensemble/ensemble_per_case.json
 """
 
 from __future__ import annotations
@@ -53,13 +53,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.phase4_train_su2 import (
+from scripts.train import (
     OOD_GROUPS,
     load_case_geom_ids,
     load_case_groups,
     split_paths,
 )
-from scripts.phase4_w1_analysis import KN_MAX, TIER_LABELS, envelope_distance
+from scripts.slice_ablation import KN_MAX, TIER_LABELS, envelope_distance
 from src.analytical import knudsen_number
 from src.data.su2 import (
     CASE_PARAM_ORDER,
@@ -95,7 +95,8 @@ def load_member(run_dir: Path, device: str) -> Transolver:
 
 
 @torch.no_grad()
-def run_inference(run_dirs: list[Path], workdir: Path, device: str) -> list[dict]:
+def run_inference(run_dirs: list[Path], workdir: Path, device: str,
+                  pinned_splits: Path | None = None) -> list[dict]:
     """Per-case ensemble records over every eval split (val included)."""
     finals = [json.loads((d / "final_eval.json").read_text()) for d in run_dirs]
     args0 = finals[0]["args"]
@@ -116,6 +117,14 @@ def run_inference(run_dirs: list[Path], workdir: Path, device: str) -> list[dict
     splits = split_paths(paths, load_case_groups(ledger), load_case_geom_ids(ledger),
                          args0["val_frac"], args0["test_frac"], args0["seed"],
                          args0["interp_frac"])
+    if pinned_splits is not None:
+        pinned = json.loads(Path(pinned_splits).read_text())
+        def _cn(p: Path) -> str:
+            return p.parent.name if p.name == "case.npz" else p.stem
+        by_name = {_cn(p): p for p in paths}
+        for split_name, names in pinned.items():
+            splits[split_name] = [by_name[n] for n in names if n in by_name]
+        print(f"[infer] applied {len(pinned)} pinned split(s) from {pinned_splits}")
 
     recs: list[dict] = []
     for split in EVAL_SPLITS:
@@ -288,7 +297,7 @@ def main() -> None:
                    help="member run dirs (same --seed and M, different --init-seed)")
     p.add_argument("--workdir", default="data/raw/kaggle_su2_stage",
                    help="dataset workdir with case npzs and ledger.db")
-    p.add_argument("--out", default="data/processed/w2")
+    p.add_argument("--out", default="data/processed/ensemble")
     p.add_argument("--per-case", default=None, metavar="JSON",
                    help="skip inference; analyze an existing ensemble_per_case.json")
     p.add_argument("--guard-dist", type=float, default=0.038,
@@ -297,8 +306,11 @@ def main() -> None:
                    help="spread above which the decision is warn (default: val p90)")
     p.add_argument("--refuse-spread", type=float, default=None,
                    help="spread above which the decision is refuse (default: 4x warn)")
-    p.add_argument("--fig-out", default="data/samples/phase4_w2_calibration.png")
+    p.add_argument("--fig-out", default="data/samples/spread_calibration.png")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--pinned-splits", default=None, metavar="JSON",
+                   help="reuse pinned split membership from a prior run to keep "
+                        "core val/test/interp comparable across dataset versions")
     args = p.parse_args()
 
     if args.per_case is not None:
@@ -307,7 +319,8 @@ def main() -> None:
         if len(args.runs) < 2:
             raise SystemExit("need at least 2 run dirs (or --per-case JSON)")
         recs = run_inference([Path(d).resolve() for d in args.runs],
-                             Path(args.workdir).resolve(), args.device)
+                             Path(args.workdir).resolve(), args.device,
+                             pinned_splits=args.pinned_splits)
         out = Path(args.out)
         out.mkdir(parents=True, exist_ok=True)
         (out / "ensemble_per_case.json").write_text(json.dumps(recs, indent=2))

@@ -59,7 +59,10 @@ CREATE INDEX IF NOT EXISTS idx_status_ord ON cases (status, ord);
 """
 
 _CASE_COLS = ("R_n", "theta_c_deg", "R_b", "R_s", "mach", "T_inf", "p_inf", "T_w")
-MAX_ATTEMPTS = 2
+# attempts increments once per claim, so this is a reboot-survival budget:
+# a case interrupted mid-run (power cycle) is reclaimed and re-run until this
+# many claims. genuine SU2 failures go through mark_failed and never consume it.
+MAX_ATTEMPTS = 6
 
 
 # ============================================================================================

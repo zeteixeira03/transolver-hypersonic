@@ -58,7 +58,7 @@ R_SPECIFIC_AIR = 287.058                      # J/(kg K), reconstruct p = rho R 
 # ============================================================================================
 
 # targets standardized in log10 space by default. the normalization study
-# (data/samples/phase4_normalization.png) pooled 21 cases: plain z on rho has
+# (data/samples/normalization_study.png) pooled 21 cases: plain z on rho has
 # skew 7.0, 91% of nodes inside |z| < 0.5 and a 25-sigma shock-layer tail; T
 # reaches 29450 K with a 4-sigma tail. log10 flattens both (max |z| < 4, skew
 # < 0.6). u and v are well-behaved under plain standardization.
@@ -344,16 +344,21 @@ def reconstruct_pressure(rho: torch.Tensor, T: torch.Tensor) -> torch.Tensor:
 def list_case_npzs(workdir: str | Path) -> list[Path]:
     """Return the sorted list of case tensors under ``workdir``.
 
-    Accepts both layouts: ``case_XXXX/case.npz`` (sweep workdir) and flat
-    ``case_XXXX.npz`` (Kaggle dataset upload). Used both by training (to
-    build the path list for ``SU2Dataset``) and by the supervisor for
-    completion checks. Sorting keeps the order stable across machines.
+    Accepts three layouts: ``case_XXXX/case.npz`` (sweep workdir), flat
+    ``case_XXXX.npz`` (Kaggle dataset upload), and ``cases/case_XXXX.npz``
+    (the tarball layout produced by ``package_dataset``). Used both by
+    training (to build the path list for ``SU2Dataset``) and by the
+    supervisor for completion checks. Sorting keeps the order stable
+    across machines.
     """
     workdir = Path(workdir)
     nested = sorted(workdir.glob("case_*/case.npz"))
     if nested:
         return nested
-    return sorted(workdir.glob("case_*.npz"))
+    flat = sorted(workdir.glob("case_*.npz"))
+    if flat:
+        return flat
+    return sorted(workdir.glob("cases/case_*.npz"))
 
 
 def case_id_from_npz_path(path: Path) -> int:

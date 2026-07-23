@@ -179,7 +179,7 @@ def make_acceptance_figure(
 
 def main():
     parser = argparse.ArgumentParser(description="canonical sphere-cone validation case")
-    parser.add_argument("--run-dir", default="data/raw/phase2_validation",
+    parser.add_argument("--run-dir", default="data/raw/cfd_validation",
                         help="output directory for run artifacts")
     parser.add_argument("--iter-pass1", type=int, default=3000,
                         help="iterations for first-order startup")
@@ -204,9 +204,9 @@ def main():
     wsl_distro = args.wsl_distro if args.wsl_distro is not None else auto_distro
     conda_env  = args.conda_env  if args.conda_env  is not None else auto_env
 
-    print(f"[phase2] run dir:    {run_dir}")
-    print(f"[phase2] invocation: distro={wsl_distro} env={conda_env}")
-    print(f"[phase2] case:       {CANONICAL}")
+    print(f"[validate] run dir:    {run_dir}")
+    print(f"[validate] invocation: distro={wsl_distro} env={conda_env}")
+    print(f"[validate] case:       {CANONICAL}")
 
     if args.skip_su2:
         result: dict[str, Any] = {
@@ -236,17 +236,17 @@ def main():
             log_filename="su2_pass1.log",
         )
         elapsed_p1 = time.time() - t0
-        print(f"[phase2] SU2_CFD pass 1 (first-order, {args.iter_pass1} iters) "
+        print(f"[validate] SU2_CFD pass 1 (first-order, {args.iter_pass1} iters) "
               f"finished in {elapsed_p1:.1f} s (rc={result_p1['returncode']})")
         if result_p1["returncode"] != 0:
-            print(f"[phase2] pass 1 failed; see {result_p1['log']}")
+            print(f"[validate] pass 1 failed; see {result_p1['log']}")
             sys.exit(2)
 
         # promote restart_flow.dat to solution_flow.dat for pass 2 read-in
         restart_dat = run_dir / "restart_flow.dat"
         solution_dat = run_dir / "solution_flow.dat"
         if not restart_dat.exists():
-            print(f"[phase2] pass 1 produced no restart_flow.dat; aborting")
+            print(f"[validate] pass 1 produced no restart_flow.dat; aborting")
             sys.exit(2)
         shutil.copyfile(restart_dat, solution_dat)
 
@@ -269,11 +269,11 @@ def main():
             log_filename="su2_pass2.log",
         )
         elapsed_p2 = time.time() - t0
-        print(f"[phase2] SU2_CFD pass 2 (second-order, {args.iter_pass2} iters) "
+        print(f"[validate] SU2_CFD pass 2 (second-order, {args.iter_pass2} iters) "
               f"finished in {elapsed_p2:.1f} s (rc={result['returncode']})")
 
     if result["returncode"] != 0:
-        print(f"[phase2] SU2_CFD failed with rc={result['returncode']}; see "
+        print(f"[validate] SU2_CFD failed with rc={result['returncode']}; see "
               f"{result['log']}")
         sys.exit(2)
 
@@ -317,7 +317,7 @@ def main():
     print(format_summary(summary))
 
     # ---- persist ----
-    out_json = run_dir / "phase2_summary.json"
+    out_json = run_dir / "cfd_validation_summary.json"
     payload = {
         "case": asdict(CANONICAL),
         "stagnation": stag,
@@ -337,16 +337,16 @@ def main():
         },
     }
     out_json.write_text(json.dumps(payload, indent=2))
-    print(f"[phase2] summary written to {out_json}")
+    print(f"[validate] summary written to {out_json}")
 
-    fig_path = run_dir / "phase2_acceptance.png"
+    fig_path = run_dir / "cfd_validation.png"
     make_acceptance_figure(CANONICAL, surface, axis, summary, standoff, fig_path)
-    print(f"[phase2] acceptance figure written to {fig_path}")
+    print(f"[validate] acceptance figure written to {fig_path}")
 
     # ---- training-tensor extraction (smoke test for the dataset sweep) ----
     npz_path = run_dir / "case.npz"
     tensors = extract_training_tensors(result["volume_vtu"], save_npz=npz_path)
-    print(f"[phase2] training tensors written to {npz_path} "
+    print(f"[validate] training tensors written to {npz_path} "
           f"(N={len(tensors['x'])} nodes, fields={sorted(tensors)})")
 
     sys.exit(0 if summary["all_passed"] else 1)

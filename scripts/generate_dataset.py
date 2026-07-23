@@ -25,7 +25,7 @@ layout also supports static partitioning across machines (``--block K``).
 
 Run from the project root::
 
-    python scripts/phase3_generate.py --workdir data/raw/phase3 --workers 4
+    python scripts/generate_dataset.py --workdir data/raw/sweep --workers 4
 
 Useful flags: ``--init-only`` (build ledger, stop), ``--dry-run`` (preflight +
 plan, no SU2), ``--no-validate`` (skip stage 2), ``--validate-only``,
@@ -116,7 +116,7 @@ _PYTHON_DEPS = ("numpy", "scipy", "matplotlib", "pyvista", "gmsh")
 #                                       mesh preset
 # ============================================================================================
 
-def phase3_mesh_kwargs(case: Case) -> dict:
+def sweep_mesh_kwargs(case: Case) -> dict:
     """Sweep mesh: the canonical validation recipe, scaled with geometry.
 
     An earlier attempt loosened the boundary layer (ratio 1.2, first cell
@@ -193,7 +193,7 @@ def solve_case(
     if warm:
         shutil.copyfile(restart_src, run_dir / "solution_flow.dat")
         res = run_case(
-            case, run_dir=run_dir, mesh_kwargs=phase3_mesh_kwargs(case),
+            case, run_dir=run_dir, mesh_kwargs=sweep_mesh_kwargs(case),
             iter_max=iter_pass2, cfl_max=cfl_max, muscl=True, restart_sol=True,
             mglevel=mglevel, conv_minval=conv_minval,
             wsl_distro=wsl_distro, conda_env=conda_env, timeout=timeout,
@@ -202,7 +202,7 @@ def solve_case(
             raise RuntimeError(f"SU2 warm restart failed rc={res['returncode']}; see {res['log']}")
     else:
         res1 = run_case(
-            case, run_dir=run_dir, mesh_kwargs=phase3_mesh_kwargs(case),
+            case, run_dir=run_dir, mesh_kwargs=sweep_mesh_kwargs(case),
             iter_max=iter_pass1, cfl_max=cfl_max, muscl=False, restart_sol=False,
             mglevel=0, conv_minval=conv_minval,
             wsl_distro=wsl_distro, conda_env=conda_env, timeout=timeout,
@@ -215,7 +215,7 @@ def solve_case(
             raise RuntimeError("pass1 produced no restart_flow.dat")
         shutil.copyfile(restart_dat, run_dir / "solution_flow.dat")
         res = run_case(
-            case, run_dir=run_dir, mesh_kwargs=phase3_mesh_kwargs(case),
+            case, run_dir=run_dir, mesh_kwargs=sweep_mesh_kwargs(case),
             iter_max=iter_pass2, cfl_max=cfl_max, muscl=True, restart_sol=True,
             mglevel=mglevel, conv_minval=conv_minval,
             wsl_distro=wsl_distro, conda_env=conda_env, timeout=timeout,
@@ -456,12 +456,12 @@ def validate_sample(args: argparse.Namespace) -> bool:
     rate (completed / total) is the real go/no-go gate; gates are
     advisory data-quality flags.
 
-    Writes ``<workdir>/.phase3_validated`` on success. ``--revalidate`` forces
+    Writes ``<workdir>/.validated`` on success. ``--revalidate`` forces
     a re-run; ``--no-validate`` skips altogether. Returns True iff every case
     completes (no exception); the marker records per-case rel errors.
     """
     workdir = Path(args.workdir)
-    marker = workdir / ".phase3_validated"
+    marker = workdir / ".validated"
     only_case = getattr(args, "validate_case", None)
     if marker.exists() and not args.revalidate and only_case is None:
         prev = json.loads(marker.read_text())
@@ -689,7 +689,7 @@ def package_dataset(args: argparse.Namespace) -> None:
           f"manifest -> {manifest}, ledger -> {ds / 'ledger.db'}")
 
     if args.make_tarball:
-        tarpath = ds / "phase3_tensors.tar.gz"
+        tarpath = ds / "sweep_tensors.tar.gz"
         with tarfile.open(tarpath, "w:gz") as tf:
             tf.add(manifest, arcname="manifest.csv")
             for cid in done_ids:
@@ -697,7 +697,7 @@ def package_dataset(args: argparse.Namespace) -> None:
                 if npz.exists():
                     tf.add(npz, arcname=f"cases/case_{cid:04d}.npz")
         print(f"[package] tarball -> {tarpath} ({tarpath.stat().st_size/1e6:.0f} MB)")
-        _maybe_upload_file(tarpath, args.hf_repo, "phase3_tensors.tar.gz")
+        _maybe_upload_file(tarpath, args.hf_repo, "sweep_tensors.tar.gz")
 
     _maybe_upload_file(manifest, args.hf_repo, "manifest.csv")
     _maybe_upload_file(ds / "ledger.db", args.hf_repo, "ledger.db")
@@ -709,7 +709,7 @@ def package_dataset(args: argparse.Namespace) -> None:
 
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(description="dataset generation pipeline")
-    p.add_argument("--workdir", default="data/raw/phase3", help="artifact root (one subdir per case)")
+    p.add_argument("--workdir", default="data/raw/sweep", help="artifact root (one subdir per case)")
     p.add_argument("--db", default=None, help="ledger path (default <workdir>/ledger.db)")
     p.add_argument("--workers", type=int, default=4, help="worker processes")
     p.add_argument("--block", type=int, default=None, help="pin workers to one block (multi-machine)")
@@ -743,7 +743,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--stale-after-s", type=float, default=7200.0, help="reclaim running rows older than this")
     p.add_argument("--max-runtime-s", type=float, default=0.0, help="exit workers after this many seconds (0=unlimited)")
     p.add_argument("--hf-repo", default=None, help="HF dataset repo id to push tensors/manifest to (needs HF_TOKEN)")
-    p.add_argument("--make-tarball", action="store_true", help="at packaging, build phase3_tensors.tar.gz")
+    p.add_argument("--make-tarball", action="store_true", help="at packaging, build sweep_tensors.tar.gz")
     # stage control
     p.add_argument("--init-only", action="store_true", help="build the ledger and exit")
     p.add_argument("--dry-run", action="store_true", help="preflight + build ledger + print the plan, no SU2")

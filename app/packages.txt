@@ -1,0 +1,7 @@
+libglu1-mesa
+libgl1
+libgomp1
+libxrender1
+libxcursor1
+libxft2
+libxinerama1
