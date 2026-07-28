@@ -25,7 +25,7 @@ $dst = "..\hf_space"; New-Item -ItemType Directory -Force $dst; `
 Copy-Item app\app.py, app\inference.py -Destination (New-Item -ItemType Directory -Force "$dst\app"); `
 Copy-Item app\README.md, app\requirements.txt, app\packages.txt -Destination $dst; `
 Copy-Item -Recurse src "$dst\src"; `
-foreach ($m in "data\processed\ablation\run_m32","data\processed\ensemble\run_m32_s1","data\processed\ensemble\run_m32_s2","data\processed\ensemble\run_m32_s3","data\processed\ensemble\run_m32_s4") { `
+foreach ($s in 0..4) { $m = "data\processed\ensemble_v3\run_m32_v3_s$s"; `
   $d = New-Item -ItemType Directory -Force "$dst\$m"; `
   Copy-Item "$m\best.pt","$m\norm_stats.pt","$m\final_eval.json" -Destination $d }
 ```

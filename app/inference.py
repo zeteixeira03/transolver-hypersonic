@@ -39,11 +39,7 @@ from src.models.transolver import Transolver
 
 ROOT = Path(__file__).resolve().parents[1]
 ENSEMBLE_DIRS = [
-    ROOT / "data/processed/ablation/run_m32",
-    ROOT / "data/processed/ensemble/run_m32_s1",
-    ROOT / "data/processed/ensemble/run_m32_s2",
-    ROOT / "data/processed/ensemble/run_m32_s3",
-    ROOT / "data/processed/ensemble/run_m32_s4",
+    ROOT / f"data/processed/ensemble_v3/run_m32_v3_s{s}" for s in range(5)
 ]
 
 # controls not exposed as sliders are fixed at box midpoints / the training wall
@@ -51,11 +47,13 @@ R_B_RATIO = 3.0      # R_b / R_n, GEOM_BOX midpoint
 R_S_RATIO = 0.10     # R_s / R_b, near the box midpoint
 T_WALL = 300.0       # K, isothermal cold wall (fixed across the whole dataset)
 
-# decision thresholds, fixed from the validation split in the ensemble UQ study
-GUARD_DIST = 0.038   # L-inf box exceedance above this -> refuse
+# decision thresholds, recalibrated on the ensemble backing ENSEMBLE_DIRS. the
+# guard distance is not a constant: it tracks how densely the extrapolation
+# region has been sampled, and moved outward from 0.038 as the OOD slabs grew
+GUARD_DIST = 0.07    # L-inf box exceedance above this -> refuse
 KN_MAX = 0.01        # continuum floor; above this -> refuse
-WARN_SPREAD = 0.101  # val-split p90 ensemble spread
-REFUSE_SPREAD = 0.25 # in-box backstop for inputs more uncertain than anything validated
+WARN_SPREAD = 0.077  # val-split p90 ensemble spread
+REFUSE_SPREAD = 0.25 # in-box backstop, just past the 0.222 max spread seen in eval
 
 
 # ============================================================================================

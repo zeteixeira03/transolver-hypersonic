@@ -6,21 +6,25 @@ ICML 2024, [arXiv:2402.02366](https://arxiv.org/abs/2402.02366)); ground truth
 is SU2 axisymmetric laminar Navier-Stokes.
 
 Work in progress. The pipeline is validated, the sweep is complete, and a
-slice-count ablation plus a calibrated deep ensemble are in (results below).
+slice-count ablation, a calibrated deep ensemble, and one active-learning
+iteration are in (results below).
 
 ## Where things stand
 
 The stack was validated end-to-end on AirfRANS first, then the SU2 pipeline
 on a canonical case against three analytical correlations (both below). A
-sweep over the sphere-cone design space has produced 727 converged cases: a
-core box of 667 cases plus out-of-distribution slabs at large and small nose
-radius, high cone half-angle, and Mach above 25.
+sweep over the sphere-cone design space produced 727 converged cases: a core
+box of 667 cases plus out-of-distribution slabs at large and small nose
+radius, high cone half-angle, and Mach above 25. An active-learning pass
+added 26 more, chosen where the ensemble disagreed with itself, bringing the
+dataset to 753.
 
 On the modeling side, a first Transolver reproduces held-out flow fields
 (`data/samples/field_prediction.png` shows predicted vs SU2 primitives on an
-unseen case). A slice-count ablation and a five-member deep ensemble with
-calibrated uncertainty follow; both are in the results below, evaluated
-against every out-of-distribution slab including the high-Mach one.
+unseen case). A slice-count ablation, a five-member deep ensemble with
+calibrated uncertainty, and the before/after on the active-learning cases
+are all in the results below, evaluated against every out-of-distribution
+slab including the high-Mach one.
 
 ## Evaluation questions
 
@@ -36,16 +40,20 @@ against every out-of-distribution slab including the high-Mach one.
 
 ## Results
 
-Numbers below are on the full sweep: 727 converged cases (667 core plus
+The dataset is 753 converged cases: a 727-case sweep (667 core plus
 out-of-distribution slabs at large nose radius, small nose radius, high cone
-angle, and Mach above 25). Every OOD slab, including the high-Mach one, is
-now evaluated. Relative L2 is per-channel, in physical units after
-de-normalization, then averaged over the four primitives.
+angle, and Mach above 25) plus 26 cases chosen by the active-learning loop
+described below. Every evaluation tier holds the same cases throughout, since
+the loop cases are routed into training and never into a held-out tier. All
+four out-of-distribution slabs are evaluated. Relative L2 is per-channel, in
+physical units after de-normalization, then averaged over the four
+primitives.
 
 ### Slice-count ablation
 
 Mean relative L2 per evaluation tier, sweeping the slice count M (best per
-column in bold):
+column in bold). These four models predate the loop, so they train on the
+727-case sweep alone:
 
 | M  | interpolation | family holdout | cone_high | mach_high | nose_large | nose_small | OOD pooled |
 |----|------|------|------|------|------|------|------|
@@ -54,15 +62,21 @@ column in bold):
 | 32 | **0.100** | **0.104** | 0.337 | **0.189** | 0.292 | 0.277 | 0.270 |
 | 64 | 0.108 | 0.111 | **0.307** | 0.202 | **0.269** | 0.286 | **0.260** |
 
-The optimum slice count still shifts with the evaluation regime, and adding
-the Mach-above-25 slab does not change the direction: M=32 is best
-in-distribution (interpolation and family holdout); M=64 is best on the
-pooled out-of-distribution metric and on most individual OOD slabs.
-Mach extrapolation is the one slab where more slices stop helping past
-M=32; every other slab keeps improving through M=64. More slices generally
-help extrapolation after they stop helping interpolation: the
-Physics-Attention bottleneck binds hardest where the flow leaves the
-training box. Dropping below 16 slices costs accuracy everywhere.
+The optimum slice count shifts with the evaluation regime. In-distribution
+the answer is firm: M=32 wins both interpolation and family holdout, and it
+is bracketed, since M=64 is worse on each. Out of distribution the grid says
+less than it appears to. M=64 wins the pooled metric at 0.260, but on
+individual slabs it takes two of four, cone_high and nose_large. Mach
+extrapolation prefers M=32 by 0.013 over 18 cases and nose_small prefers M=8
+over 8 cases; neither margin carries weight at those sample sizes. Pooled
+OOD error also falls at every step of the grid, 0.313 down to 0.260, so the
+out-of-distribution optimum is not bracketed and may sit past M=64. Finding
+it would need M=96 and M=128, a full retrain each.
+
+What the grid does support is that more slices help extrapolation after they
+have stopped helping interpolation, the Physics-Attention bottleneck binding
+hardest where the flow leaves the training box, and that dropping below 16
+slices costs accuracy everywhere.
 
 Within the box, geometry generalization is nearly free. At M=32 the family
 holdout, whole geometry clusters unseen in training (0.104), is barely harder
@@ -70,35 +84,42 @@ than freestream interpolation on seen shapes (0.100). The 3x error jump is at
 the envelope boundary, not between geometry tiers. The
 error-vs-envelope-distance figure (`data/samples/envelope_distance.png`)
 puts a threshold on it: binned median error doubles about 7% outside the
-box, which becomes the geometric half of the decision rule below. That
-threshold moved from an earlier estimate of 4% once the high-Mach and
-larger cone_high slabs were added; the boundary is real but its exact
-location depends on how much of the extrapolation region has been sampled.
+box, which becomes the geometric half of the decision rule below. The
+boundary is real, but its measured location is not a fixed property of the
+model. On an earlier, sparser out-of-distribution sample the same figure put
+it at 3.8%, and it moved outward to 7% once the cone_high slab grew from 5
+cases to 14 and the mach_high slab arrived with 18. Treat it as a threshold
+calibrated against the extrapolation data on hand, not a constant.
 
 ### Uncertainty and the trust/warn/refuse rule
 
 Five Transolvers at M=32, identical splits and data, differing only in
 initialization and data order (a deep ensemble). The ensemble mean is the
-prediction, the spread across members is the uncertainty. Averaging beats the
-best single member in-distribution and on the high-Mach slab:
+prediction, the spread across members is the uncertainty. This is the model
+the dashboard serves, trained on all 753 cases. Averaging beats the best
+single member on every tier:
 
 | tier | ensemble | best single member | mean spread |
 |------|------|------|------|
-| interpolation    | 0.091 | 0.100 | 0.068 |
-| family holdout   | 0.092 | 0.104 | 0.073 |
-| cone_high (OOD)  | 0.296 | 0.288 | 0.176 |
-| mach_high (OOD)  | 0.180 | 0.189 | 0.114 |
-| nose_large (OOD) | 0.255 | 0.251 | 0.158 |
-| nose_small (OOD) | 0.218 | 0.241 | 0.146 |
+| interpolation    | 0.084 | 0.092 | 0.064 |
+| family holdout   | 0.083 | 0.094 | 0.069 |
+| cone_high (OOD)  | 0.220 | 0.250 | 0.160 |
+| mach_high (OOD)  | 0.162 | 0.170 | 0.103 |
+| nose_large (OOD) | 0.276 | 0.277 | 0.153 |
+| nose_small (OOD) | 0.208 | 0.223 | 0.128 |
 
-On cone_high and nose_large the ensemble mean stays within noise of the best
-single member, same as before; the ensemble's clear wins are in-distribution
-and now also on mach_high.
+The margin over the best member is largest where the flow leaves the training
+box, apart from nose_large, where the two are indistinguishable.
 
-Spread tracks actual error: the rank correlation between per-case spread and
-per-case error is 0.94 pooled over all evaluation tiers, 0.86 on each
-in-distribution tier, 0.76-0.82 per OOD slab. Spread is a usable error proxy
-that needs no ground truth (`data/samples/spread_calibration.png`).
+Spread tracks actual error out of distribution: the rank correlation between
+per-case spread and per-case error runs 0.74 to 0.86 across the four OOD
+slabs, 0.72 pooled. In-distribution it is much weaker, 0.55 on interpolation
+and 0.05 on the family holdout, because in-box errors are packed into a
+narrow range and the ranking is mostly noise
+(`data/samples/spread_calibration.png`). Spread is a usable error proxy for
+detecting extrapolation, not for ranking cases the model already handles
+well. The pooled 0.72 is inflated by the OOD tiers spanning a wide error
+range and should not be quoted as if it held in-box.
 
 That gives an operational rule for whether to trust a prediction. Refuse if
 the input falls outside the training envelope (box exceedance, or Knudsen
@@ -107,15 +128,71 @@ moderate spread; trust otherwise. Over the evaluation cases:
 
 | decision | cases | median error | p90 error |
 |------|------|------|------|
-| trust  | 86 | 0.085 | 0.129 |
-| warn   | 10 | 0.182 | 0.218 |
-| refuse | 52 | 0.219 | 0.404 |
+| trust  | 93 | 0.078 | 0.114 |
+| warn   | 18 | 0.120 | 0.187 |
+| refuse | 68 | 0.159 | 0.362 |
 
 The buckets order cleanly by actual error. The honest limitation: spread
 cannot catch a consensus error. One in-box case sits at 0.40 error with low
 spread because all five members share the same systematic miss, so they agree
 with each other. Ensemble disagreement measures epistemic uncertainty, not a
 shared blind spot.
+
+### Active-learning loop
+
+One iteration of the obvious loop: score a Latin-hypercube pool over the six
+free design axes by ensemble spread, pick a diverse batch of the most
+uncertain in-envelope candidates, run them through SU2, retrain, compare.
+Thirty cases were selected and run, 26 converged. The 13% failure rate is
+above the sweep's 3.5%, which is expected: acquisition targets high-spread
+regions and those are where the solver strains too. Failures were logged and
+skipped, not rescued.
+
+The control is a five-member ensemble trained on the 727 sweep cases; the
+treatment is the same recipe with the 26 loop cases added. Both share a split
+seed, so every evaluation tier holds the same cases and the per-case
+difference is paired.
+
+| tier | n | before | after | delta | 95% CI | p |
+|------|---|--------|-------|-------|--------|---|
+| interpolation    | 54 | 0.085 | 0.084 | -0.0013 | [-0.0035, +0.0008] | 0.35 |
+| family holdout   | 65 | 0.090 | 0.083 | -0.0078 | [-0.0118, -0.0041] | <0.001 |
+| cone_high (OOD)  | 14 | 0.236 | 0.220 | -0.0159 | [-0.0245, -0.0057] | 0.03 |
+| mach_high (OOD)  | 18 | 0.171 | 0.162 | -0.0089 | [-0.0159, -0.0019] | 0.03 |
+| nose_large (OOD) | 20 | 0.281 | 0.276 | -0.0048 | [-0.0144, +0.0041] | 0.52 |
+| nose_small (OOD) | 8  | 0.244 | 0.208 | -0.0364 | [-0.0501, -0.0225] | 0.01 |
+
+Measuring error at the acquired points themselves would prove nothing: those
+cases are in the treatment's training set and were never in the control's, so
+the treatment wins there by construction. The test that means something is
+whether held-out error improved *more near the acquired points than far from
+them*, in six-dimensional parameter distance normalized by the core-box
+width:
+
+| distance to nearest acquired case | n | before | after | delta |
+|-----------------------------------|---|--------|-------|-------|
+| 0.21 to 0.50 | 40 | 0.093 | 0.083 | -0.0097 |
+| 0.50 to 0.59 | 39 | 0.084 | 0.081 | -0.0031 |
+| 0.59 to 0.80 | 40 | 0.087 | 0.086 | -0.0017 |
+
+The near bin improves about six times as much as the far bin, and the trend
+is monotone (Spearman 0.31 between distance and error change, p = 0.001 over
+119 cases). That is the loop mechanism doing what it should: data added where
+the ensemble was unsure helps most in the neighborhood of what was added.
+There is no global regression: 31% of held-out cases got worse, against a
+mean change of -0.0075 (`data/samples/loop_neighborhood.png`).
+
+Three caveats, none of them small. Twenty-six cases on a 481-case training
+split is a 5% increase, so the absolute movement is a few thousandths of
+relative L2 and this verifies a mechanism rather than delivering an accuracy
+result. Twenty-six points is thin cover for a six-dimensional box: the median
+held-out case sits 0.54 from the nearest acquired case but only 0.24 from the
+nearest case already in training, so most of the evaluation set has no
+acquired point near enough to be affected. And the loop inherits the blind
+spot of its own acquisition signal, since spread-driven selection cannot see
+consensus errors, the failure mode above. The out-of-distribution gains are
+worth noting but not over-reading: acquisition ran in-box only, so nothing
+targeted those slabs, and nose_small rests on 8 cases.
 
 ## Validating the stack on AirfRANS
 
@@ -183,6 +260,12 @@ analytical correlations before acceptance. The runner is resumable: a SQLite
 ledger tracks per-case status, so interrupted sessions pick up where they
 stopped and failed cases are logged and skipped rather than rescued.
 
+`scripts/acquire_loop.py` and `scripts/run_loop_cases.py` add cases the same
+way, differing only in how the design points are chosen: by ensemble spread
+rather than Latin hypercube. They carry `group_name='loop'` in the ledger,
+which routes them into the training split and keeps them out of every
+held-out tier.
+
 The raw sweep output is not committed. The converged cases (as
 `case_*.npz` tensors plus the ledger) are published as the Kaggle dataset
 `zeteixeira/su2-hypersonic-sphere-cone`, which is what the training
@@ -228,6 +311,9 @@ scripts/
   train.py                 # training CLI (slice sweep, ensembles, eval-only)
   slice_ablation.py        # ablation tables + envelope-distance figure
   ensemble_uq.py           # deep-ensemble UQ and trust/warn/refuse
+  acquire_loop.py          # active-learning acquisition scan over the box
+  run_loop_cases.py        # drives the acquired cases through SU2
+  loop_report.py           # before/after report for the loop iteration
 notebooks/
   01_validate_stack.ipynb  # AirfRANS validation, Kaggle orchestrator
   02_train_su2.ipynb       # SU2 training runs, Kaggle orchestrator

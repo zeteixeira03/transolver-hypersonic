@@ -300,7 +300,7 @@ def main() -> None:
     p.add_argument("--out", default="data/processed/ensemble")
     p.add_argument("--per-case", default=None, metavar="JSON",
                    help="skip inference; analyze an existing ensemble_per_case.json")
-    p.add_argument("--guard-dist", type=float, default=0.038,
+    p.add_argument("--guard-dist", type=float, default=0.07,
                    help="envelope guard threshold on box exceedance")
     p.add_argument("--warn-spread", type=float, default=None,
                    help="spread above which the decision is warn (default: val p90)")
