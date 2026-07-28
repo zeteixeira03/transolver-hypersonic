@@ -203,7 +203,12 @@ def test_reclaim_stale(tmp_path):
     # a zero lease reclaims the running row back to pending (attempts 1 < MAX_ATTEMPTS)
     assert L.reclaim_stale(db, max_age_s=0.0) == 1
     assert L.status_counts(db) == {"pending": 1}
-    # claim again to reach MAX_ATTEMPTS, then expiring the lease marks it failed
+    # burn the rest of the budget; every claim costs one attempt
+    for _ in range(L.MAX_ATTEMPTS - 2):
+        L.claim_next(db, "worker_a")
+        assert L.reclaim_stale(db, max_age_s=0.0) == 1
+        assert L.status_counts(db) == {"pending": 1}
+    # the last claim exhausts it, so expiring the lease marks the row failed
     L.claim_next(db, "worker_a")
     assert L.reclaim_stale(db, max_age_s=0.0) == 1
     con = L.connect(db)
@@ -212,3 +217,4 @@ def test_reclaim_stale(tmp_path):
     finally:
         con.close()
     assert row["status"] == "failed"
+    assert row["attempts"] == L.MAX_ATTEMPTS
