@@ -6,12 +6,15 @@ of the most-uncertain in-envelope cases to simulate next. This is the
 acquisition half of one active-learning loop iteration: the ensemble points at
 where it is least sure, and those points become the next SU2 runs.
 
-The candidate axes match the dashboard's four exposed controls
-(R_n, theta_c, Mach, altitude), with R_b = 3 R_n and R_s = 0.1 R_b, so the
-acquired cases improve exactly the input space a dashboard user queries. Only
-in-envelope (box exceedance <= guard) and continuum (Kn <= 0.01) candidates are
-scored; the loop is about sharpening the model inside its validated domain, not
-chasing extrapolation the guard already refuses.
+The candidate axes are the six free design parameters: nose radius, cone
+half-angle, the two aspect ratios R_b/R_n and R_s/R_b, Mach, and altitude
+(freestream T and p follow altitude through the atmosphere model; wall
+temperature is fixed). Scanning the full box, including the aspect-ratio
+directions, lets the acquisition find uncertainty anywhere in the design
+space rather than along a single geometry line. Only in-envelope (box
+exceedance <= guard) and continuum (Kn <= 0.01) candidates are scored; the
+loop sharpens the model inside its validated domain, not extrapolation the
+guard already refuses.
 
 Scoring meshes each candidate at training resolution and runs every ensemble
 member, which costs seconds per candidate, so the scan writes a resumable JSONL
@@ -47,12 +50,12 @@ from inference import (  # noqa: E402  -- app/ helpers, path-injected above
     Ensemble,
     _channel_spread,
     _ensemble_forward,
-    build_params,
     envelope_distance,
     mesh_nodes,
 )
 from src.analytical import knudsen_number  # noqa: E402
 from src.data.sampler import GEOM_BOX, FS_BOX, KN_MAX  # noqa: E402
+from src.data.sampler import us_standard_atmosphere  # noqa: E402
 from src.data.su2 import (  # noqa: E402
     CASE_PARAM_ORDER, N_CASE_PARAMS, POS_DIM, TARGET_ORDER,
     SU2NormStats,
@@ -60,9 +63,25 @@ from src.data.su2 import (  # noqa: E402
 from src.models.transolver import Transolver  # noqa: E402
 
 
-# the four scanned axes and their core-box ranges (dashboard convention:
-# R_b_ratio and R_s_ratio are fixed, not scanned)
-SCAN_AXES = ("R_n", "theta_c", "mach", "altitude")
+T_WALL = 300.0  # K, isothermal cold wall, fixed across the dataset
+
+# the six free design axes: four geometry (nose radius, cone angle, and the two
+# aspect ratios R_b/R_n and R_s/R_b) plus Mach and altitude. T_inf and p_inf
+# follow altitude through the atmosphere model; T_w is fixed. Scanning all six
+# lets the acquisition reach the aspect-ratio directions of the box, not only
+# the R_b = 3 R_n, R_s = 0.1 R_b line.
+SCAN_AXES = ("R_n", "theta_c", "R_b_ratio", "R_s_ratio", "mach", "altitude")
+
+
+def build_params(scan: dict[str, float]) -> dict[str, float]:
+    """Expand the six scan axes into the full eight-parameter case vector."""
+    T_inf, p_inf, _rho = us_standard_atmosphere(scan["altitude"])
+    R_b = scan["R_b_ratio"] * scan["R_n"]
+    R_s = scan["R_s_ratio"] * R_b
+    return {
+        "R_n": scan["R_n"], "theta_c_deg": scan["theta_c"], "R_b": R_b, "R_s": R_s,
+        "mach": scan["mach"], "T_inf": T_inf, "p_inf": p_inf, "T_w": T_WALL,
+    }
 
 
 def load_ensemble_from(ensemble_dir: Path, member_glob: str, device: str) -> Ensemble:
@@ -92,19 +111,21 @@ def load_ensemble_from(ensemble_dir: Path, member_glob: str, device: str) -> Ens
 
 
 def candidate_pool(n: int, seed: int) -> list[dict[str, float]]:
-    """LHS over the four scan axes within the core box (in dashboard units)."""
+    """LHS over the six scan axes within the core box."""
     lo = np.array([GEOM_BOX["R_n"][0], GEOM_BOX["theta_c"][0],
+                   GEOM_BOX["R_b_ratio"][0], GEOM_BOX["R_s_ratio"][0],
                    FS_BOX["mach"][0], FS_BOX["altitude"][0]])
     hi = np.array([GEOM_BOX["R_n"][1], GEOM_BOX["theta_c"][1],
+                   GEOM_BOX["R_b_ratio"][1], GEOM_BOX["R_s_ratio"][1],
                    FS_BOX["mach"][1], FS_BOX["altitude"][1]])
-    sampler = qmc.LatinHypercube(d=4, seed=seed)
+    sampler = qmc.LatinHypercube(d=6, seed=seed)
     pts = qmc.scale(sampler.random(n), lo, hi)
     return [dict(zip(SCAN_AXES, row)) for row in pts]
 
 
 def score_candidate(ens: Ensemble, cand: dict[str, float], device: str) -> dict:
     """Mesh, run the ensemble, return spread + envelope distance + Kn."""
-    params = build_params(cand["R_n"], cand["theta_c"], cand["mach"], cand["altitude"])
+    params = build_params(cand)
     coords = mesh_nodes(params)
     members = _ensemble_forward(ens, coords, params, device)
     spread = _channel_spread(members)
@@ -117,7 +138,7 @@ def score_candidate(ens: Ensemble, cand: dict[str, float], device: str) -> dict:
 
 
 def _normalize(recs: list[dict]) -> np.ndarray:
-    """Min-max normalize the four scan axes to [0, 1] for distance selection."""
+    """Min-max normalize the six scan axes to [0, 1] for distance selection."""
     X = np.array([[r["scan"][a] for a in SCAN_AXES] for r in recs])
     lo, hi = X.min(axis=0), X.max(axis=0)
     span = np.where(hi > lo, hi - lo, 1.0)
@@ -155,7 +176,9 @@ def main() -> None:
     p.add_argument("--member-glob", default="run_m32_v2_s*")
     p.add_argument("--n-candidates", type=int, default=1200)
     p.add_argument("--k", type=int, default=10)
-    p.add_argument("--guard-dist", type=float, default=0.038)
+    # the scan that produced the committed batch ran at 0.038, the guard value
+    # current at the time; a tighter guard only narrows the candidate region
+    p.add_argument("--guard-dist", type=float, default=0.07)
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--out", default="data/processed/loop/acquisition")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
@@ -199,13 +222,13 @@ def main() -> None:
           "dist": r["dist"], "kn": r["kn"]} for r in batch], indent=2))
 
     print(f"\n[select] {args.k} loop candidates (spread-ranked, distance-spread):\n")
-    print("| # | R_n mm | theta_c | Mach | alt km | spread | dist | Kn |")
-    print("|---|--------|---------|------|--------|--------|------|-----|")
+    print("| # | R_n mm | theta_c | R_b/R_n | R_s/R_b | Mach | alt km | spread | dist | Kn |")
+    print("|---|--------|---------|---------|---------|------|--------|--------|------|-----|")
     for i, r in enumerate(batch, 1):
         s = r["scan"]
-        print(f"| {i} | {s['R_n']*1e3:.1f} | {s['theta_c']:.1f} | {s['mach']:.1f} "
-              f"| {s['altitude']:.1f} | {r['spread']:.3f} | {r['dist']:.3f} "
-              f"| {r['kn']:.4f} |")
+        print(f"| {i} | {s['R_n']*1e3:.1f} | {s['theta_c']:.1f} | {s['R_b_ratio']:.2f} "
+              f"| {s['R_s_ratio']:.3f} | {s['mach']:.1f} | {s['altitude']:.1f} "
+              f"| {r['spread']:.3f} | {r['dist']:.3f} | {r['kn']:.4f} |")
     print(f"\n[select] wrote {out / 'selected.json'}")
 
 

@@ -344,21 +344,20 @@ def reconstruct_pressure(rho: torch.Tensor, T: torch.Tensor) -> torch.Tensor:
 def list_case_npzs(workdir: str | Path) -> list[Path]:
     """Return the sorted list of case tensors under ``workdir``.
 
-    Accepts three layouts: ``case_XXXX/case.npz`` (sweep workdir), flat
-    ``case_XXXX.npz`` (Kaggle dataset upload), and ``cases/case_XXXX.npz``
-    (the tarball layout produced by ``package_dataset``). Used both by
-    training (to build the path list for ``SU2Dataset``) and by the
-    supervisor for completion checks. Sorting keeps the order stable
-    across machines.
+    Accepts three layouts and merges them: ``case_XXXX/case.npz`` (per-case
+    run directories), flat ``case_XXXX.npz``, and ``cases/case_XXXX.npz``
+    (the tarball layout). A workdir can hold more than one at once, as when
+    an unpacked archive sits beside freshly solved run directories, so all
+    three are collected and de-duplicated by case id rather than returning
+    the first layout that matches. Results are sorted by case id, which
+    keeps the order stable across machines.
     """
     workdir = Path(workdir)
-    nested = sorted(workdir.glob("case_*/case.npz"))
-    if nested:
-        return nested
-    flat = sorted(workdir.glob("case_*.npz"))
-    if flat:
-        return flat
-    return sorted(workdir.glob("cases/case_*.npz"))
+    by_id: dict[int, Path] = {}
+    for pattern in ("case_*/case.npz", "case_*.npz", "cases/case_*.npz"):
+        for p in workdir.glob(pattern):
+            by_id.setdefault(case_id_from_npz_path(p), p)
+    return [by_id[cid] for cid in sorted(by_id)]
 
 
 def case_id_from_npz_path(path: Path) -> int:
