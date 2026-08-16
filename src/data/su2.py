@@ -19,6 +19,11 @@ Inputs to the model are per-node and stack as
 with the 8 case parameters broadcast from shape (8,) to (N, 8). Outputs are
 ``[rho, u, v, T]`` (4 channels) per node.
 
+The prior ablation adds one alternative layout: with ``with_p`` set, p becomes
+a fifth free output channel, its target computed as ``rho R T`` from the
+stored fields. That arm exists to measure what the hard EoS constraint is
+worth and is not the project default.
+
 The dataset loads .npz files lazily on ``__getitem__``; at ~60k nodes and
 six float32 fields per case the on-disk footprint is roughly 1.4 MB compressed
 per case (~1 GB across the planned 780-case sweep), well under the memory
@@ -50,6 +55,11 @@ INPUT_DIM = POS_DIM + N_CASE_PARAMS           # 10
 TARGET_ORDER = ("rho", "u", "v", "T")
 TARGET_DIM = len(TARGET_ORDER)                # 4
 
+# the prior ablation's free-pressure arm relaxes the hard EoS constraint and
+# lets the network emit p as a fifth channel. everything else in the project
+# reconstructs p from (rho, T); this exists to measure what that buys.
+TARGET_ORDER_WITH_P = TARGET_ORDER + ("p",)
+
 R_SPECIFIC_AIR = 287.058                      # J/(kg K), reconstruct p = rho R T
 
 
@@ -63,6 +73,10 @@ R_SPECIFIC_AIR = 287.058                      # J/(kg K), reconstruct p = rho R 
 # reaches 29450 K with a 4-sigma tail. log10 flattens both (max |z| < 4, skew
 # < 0.6). u and v are well-behaved under plain standardization.
 DEFAULT_LOG_TARGETS = ("rho", "T")
+# p spans freestream O(10 Pa) to stagnation O(1e6 Pa). the hard-EoS arm
+# reconstructs it from log-rho and log-T, so logging p keeps the free-channel
+# comparison on the same footing.
+DEFAULT_LOG_TARGETS_WITH_P = ("rho", "T", "p")
 
 
 @dataclass
@@ -70,20 +84,21 @@ class SU2NormStats:
     """Per-channel mean and std for inputs and targets.
 
     Inputs are 10-channel ``[x, r, R_n, theta_c, R_b, R_s, M, T_inf, p_inf, T_w]``.
-    Targets are 4-channel ``[rho, u, v, T]``. Each channel is standardized
-    independently.
+    Targets are ``[rho, u, v, T]``, or that plus ``p`` when the free-pressure
+    arm is active. Each channel is standardized independently.
     """
 
     x_mean: torch.Tensor   # (10,)
     x_std: torch.Tensor    # (10,)
-    y_mean: torch.Tensor   # (4,)
-    y_std: torch.Tensor    # (4,)
+    y_mean: torch.Tensor   # (len(targets),)
+    y_std: torch.Tensor    # (len(targets),)
     log_targets: tuple[str, ...] = DEFAULT_LOG_TARGETS
+    targets: tuple[str, ...] = TARGET_ORDER
 
     @property
     def log_mask(self) -> torch.Tensor:
         return torch.tensor(
-            [name in self.log_targets for name in TARGET_ORDER], dtype=torch.bool,
+            [name in self.log_targets for name in self.targets], dtype=torch.bool,
         )
 
     def to(self, device: torch.device) -> "SU2NormStats":
@@ -93,6 +108,7 @@ class SU2NormStats:
             y_mean=self.y_mean.to(device),
             y_std=self.y_std.to(device),
             log_targets=self.log_targets,
+            targets=self.targets,
         )
 
     def save(self, path: str | Path) -> None:
@@ -100,19 +116,26 @@ class SU2NormStats:
             "x_mean": self.x_mean, "x_std": self.x_std,
             "y_mean": self.y_mean, "y_std": self.y_std,
             "log_targets": list(self.log_targets),
+            "targets": list(self.targets),
         }, str(path))
 
     @classmethod
     def load(cls, path: str | Path) -> "SU2NormStats":
         d = torch.load(str(path), map_location="cpu")
+        # checkpoints written before the free-pressure arm carry no "targets"
         return cls(d["x_mean"], d["x_std"], d["y_mean"], d["y_std"],
-                   tuple(d.get("log_targets", ())))
+                   tuple(d.get("log_targets", ())),
+                   tuple(d.get("targets", TARGET_ORDER)))
 
 
-def transform_targets(y_raw: np.ndarray, log_targets: tuple[str, ...]) -> np.ndarray:
+def transform_targets(
+    y_raw: np.ndarray,
+    log_targets: tuple[str, ...],
+    targets: tuple[str, ...] = TARGET_ORDER,
+) -> np.ndarray:
     """Map physical targets into the space stats are fit in (log10 where flagged)."""
     y = y_raw.copy()
-    for i, name in enumerate(TARGET_ORDER):
+    for i, name in enumerate(targets):
         if name in log_targets:
             y[:, i] = np.log10(np.clip(y[:, i], 1e-30, None))
     return y
@@ -146,15 +169,28 @@ def load_case_npz(path: str | Path) -> dict[str, np.ndarray]:
     return {k: np.asarray(d[k], dtype=np.float32) for k in required}
 
 
-def stack_case_features(case_data: dict[str, np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+def stack_case_features(
+    case_data: dict[str, np.ndarray],
+    with_p: bool = False,
+) -> tuple[np.ndarray, np.ndarray]:
     """Build per-node (inputs, targets) for one case.
+
+    Parameters
+    ----------
+    case_data : dict
+        Arrays from :func:`load_case_npz`.
+    with_p : bool
+        Append pressure as a fifth target channel. The npz files store only
+        (rho, u, v, T), but the ground truth is calorically perfect ideal
+        gas, so ``rho R T`` reproduces SU2's own p exactly and no
+        re-extraction is needed.
 
     Returns
     -------
     x : np.ndarray, shape (N, 10)
         Stacked ``[x, r, ...case_params (broadcast)]``.
-    y : np.ndarray, shape (N, 4)
-        Stacked ``[rho, u, v, T]``.
+    y : np.ndarray, shape (N, 4) or (N, 5)
+        Stacked ``[rho, u, v, T]``, plus ``p`` when requested.
     """
     x_node = case_data["x"]
     r_node = case_data["r"]
@@ -164,10 +200,10 @@ def stack_case_features(case_data: dict[str, np.ndarray]) -> tuple[np.ndarray, n
     feats = np.concatenate(
         [x_node[:, None], r_node[:, None], case_broadcast], axis=1,
     )                                                          # (N, 10)
-    targets = np.stack(
-        [case_data["rho"], case_data["u"], case_data["v"], case_data["T"]],
-        axis=1,
-    )                                                          # (N, 4)
+    channels = [case_data["rho"], case_data["u"], case_data["v"], case_data["T"]]
+    if with_p:
+        channels.append(case_data["rho"] * R_SPECIFIC_AIR * case_data["T"])
+    targets = np.stack(channels, axis=1)                       # (N, 4) or (N, 5)
     return feats.astype(np.float32, copy=False), targets.astype(np.float32, copy=False)
 
 
@@ -179,7 +215,8 @@ def compute_norm_stats(
     paths: list[str | Path],
     *,
     eps: float = 1e-8,
-    log_targets: tuple[str, ...] = DEFAULT_LOG_TARGETS,
+    log_targets: tuple[str, ...] | None = None,
+    with_p: bool = False,
 ) -> SU2NormStats:
     """Compute per-channel mean/std across all training points.
 
@@ -195,7 +232,16 @@ def compute_norm_stats(
         accuracy.
     eps : float
         Added to the std to avoid divide-by-zero on degenerate channels.
+    log_targets : tuple of str, optional
+        Channels to standardize in log10 space. None takes the project
+        default for the active layout; pass an empty tuple for plain
+        standardization on every channel.
+    with_p : bool
+        Fit stats for the 5-channel target layout including pressure.
     """
+    targets_order = TARGET_ORDER_WITH_P if with_p else TARGET_ORDER
+    if log_targets is None:
+        log_targets = DEFAULT_LOG_TARGETS_WITH_P if with_p else DEFAULT_LOG_TARGETS
     n_total = 0
     x_mean: np.ndarray | None = None
     x_m2: np.ndarray | None = None
@@ -204,8 +250,8 @@ def compute_norm_stats(
 
     for path in paths:
         case = load_case_npz(path)
-        feats, targets = stack_case_features(case)
-        targets = transform_targets(targets, log_targets)
+        feats, targets = stack_case_features(case, with_p=with_p)
+        targets = transform_targets(targets, log_targets, targets_order)
         n = feats.shape[0]
         if n == 0:
             continue
@@ -242,6 +288,7 @@ def compute_norm_stats(
         y_mean=torch.tensor(y_mean, dtype=torch.float32),
         y_std=torch.tensor(y_std, dtype=torch.float32),
         log_targets=log_targets,
+        targets=targets_order,
     )
 
 
@@ -265,6 +312,14 @@ class SU2Dataset(Dataset):
     subsample : int, optional
         If given, draw this many nodes per item (uniform without
         replacement). Resampled per call so each epoch sees a fresh subset.
+    qw_by_name : dict, optional
+        ``{case_name: q_w}`` in W/m^2, from the ledger. When given, items
+        carry a ``qw`` scalar for the auxiliary heat-flux head. Cases absent
+        from the map get NaN and are masked out of the auxiliary loss.
+
+    The target layout follows ``stats.targets``, so the free-pressure arm is
+    selected by the stats the dataset is built with rather than a second flag
+    that could disagree with them.
     """
 
     def __init__(
@@ -272,10 +327,13 @@ class SU2Dataset(Dataset):
         paths: list[str | Path],
         stats: SU2NormStats,
         subsample: int | None = None,
+        qw_by_name: dict[str, float] | None = None,
     ) -> None:
         self.paths = [Path(p) for p in paths]
         self.stats = stats
         self.subsample = subsample
+        self.qw_by_name = qw_by_name
+        self.with_p = "p" in stats.targets
 
     def __len__(self) -> int:
         return len(self.paths)
@@ -283,7 +341,7 @@ class SU2Dataset(Dataset):
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor | str]:
         path = self.paths[idx]
         case = load_case_npz(path)
-        feats, targets = stack_case_features(case)
+        feats, targets = stack_case_features(case, with_p=self.with_p)
         n = feats.shape[0]
         if self.subsample is not None and n > self.subsample:
             indices = random.sample(range(n), self.subsample)
@@ -294,9 +352,15 @@ class SU2Dataset(Dataset):
         y_raw = torch.from_numpy(targets)
         pos = x_raw[:, :POS_DIM].clone()                           # unnormalized (x, r)
 
-        y_t = torch.from_numpy(transform_targets(targets, self.stats.log_targets))
+        y_t = torch.from_numpy(
+            transform_targets(targets, self.stats.log_targets, self.stats.targets)
+        )
         x = (x_raw - self.stats.x_mean) / self.stats.x_std
         y = (y_t - self.stats.y_mean) / self.stats.y_std
+
+        name = path.parent.name if path.name == "case.npz" else path.stem
+        qw = float("nan") if self.qw_by_name is None else self.qw_by_name.get(
+            name, float("nan"))
 
         return {
             "x": x,
@@ -304,7 +368,8 @@ class SU2Dataset(Dataset):
             "y_raw": y_raw,
             "pos": pos,
             "case_params": torch.from_numpy(case["case_params"]),
-            "name": path.parent.name if path.name == "case.npz" else path.stem,
+            "qw": torch.tensor(qw, dtype=torch.float32),
+            "name": name,
         }
 
 

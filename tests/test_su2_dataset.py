@@ -25,6 +25,8 @@ from src.data.su2 import (
     SU2Dataset,
     SU2NormStats,
     TARGET_DIM,
+    TARGET_ORDER,
+    TARGET_ORDER_WITH_P,
     case_id_from_npz_path,
     compute_norm_stats,
     denormalize_targets,
@@ -103,6 +105,84 @@ def test_stack_case_features_shapes(tmp_path):
     assert targets.shape == (128, TARGET_DIM)
     # case params broadcast: every node carries the same 8 trailing values
     assert np.allclose(feats[:, 2:], case["case_params"])
+
+
+# ============================================================================================
+#                                       free-pressure target layout
+# ============================================================================================
+
+def test_stack_case_features_with_p_matches_ideal_gas(tmp_path):
+    p = _synth_case(tmp_path, "case_0000", n=128)
+    case = load_case_npz(p)
+    _, targets = stack_case_features(case, with_p=True)
+    assert targets.shape == (128, TARGET_DIM + 1)
+    # the fifth channel is the EoS pressure of the stored rho and T, so the
+    # free-channel arm is trained against exactly the p the hard arm would
+    # have reconstructed
+    assert np.allclose(targets[:, 4], case["rho"] * R_SPECIFIC_AIR * case["T"],
+                       rtol=1e-5)
+    assert np.allclose(targets[:, :4], stack_case_features(case)[1])
+
+
+def test_norm_stats_with_p_have_five_channels(tmp_path):
+    paths = [_synth_case(tmp_path, f"case_{i:04d}", n=200, seed=i) for i in range(3)]
+    stats = compute_norm_stats(paths, with_p=True)
+    assert stats.targets == TARGET_ORDER_WITH_P
+    assert stats.y_mean.shape == (TARGET_DIM + 1,)
+    assert stats.log_mask.tolist() == [True, False, False, True, True]
+
+
+def test_dataset_target_layout_follows_stats(tmp_path):
+    paths = [_synth_case(tmp_path, f"case_{i:04d}", n=200, seed=i) for i in range(3)]
+    ds = SU2Dataset(paths, compute_norm_stats(paths, with_p=True))
+    assert ds[0]["y"].shape[1] == TARGET_DIM + 1
+    ds4 = SU2Dataset(paths, compute_norm_stats(paths))
+    assert ds4[0]["y"].shape[1] == TARGET_DIM
+
+
+def test_denormalize_round_trips_with_p(tmp_path):
+    paths = [_synth_case(tmp_path, f"case_{i:04d}", n=200, seed=i) for i in range(3)]
+    stats = compute_norm_stats(paths, with_p=True)
+    ds = SU2Dataset(paths, stats)
+    item = ds[0]
+    assert torch.allclose(denormalize_targets(item["y"], stats), item["y_raw"],
+                          rtol=1e-3, atol=1e-3)
+
+
+# ============================================================================================
+#                                       plain-standardization arm
+# ============================================================================================
+
+def test_no_log_targets_round_trips(tmp_path):
+    """The plain-standardization arm must invert without a log10 step."""
+    paths = [_synth_case(tmp_path, f"case_{i:04d}", n=200, seed=i) for i in range(3)]
+    stats = compute_norm_stats(paths, log_targets=())
+    assert not stats.log_mask.any()
+    ds = SU2Dataset(paths, stats)
+    item = ds[0]
+    assert torch.allclose(denormalize_targets(item["y"], stats), item["y_raw"],
+                          rtol=1e-3, atol=1e-3)
+
+
+def test_norm_stats_roundtrip_preserves_targets(tmp_path):
+    paths = [_synth_case(tmp_path, f"case_{i:04d}", n=200, seed=i) for i in range(2)]
+    stats = compute_norm_stats(paths, with_p=True)
+    out = tmp_path / "stats.pt"
+    stats.save(out)
+    loaded = SU2NormStats.load(out)
+    assert loaded.targets == TARGET_ORDER_WITH_P
+    assert loaded.log_targets == stats.log_targets
+
+
+def test_stats_load_defaults_targets_for_old_checkpoints(tmp_path):
+    """Checkpoints written before the free-pressure arm carry no target list."""
+    out = tmp_path / "old_stats.pt"
+    torch.save({
+        "x_mean": torch.zeros(INPUT_DIM), "x_std": torch.ones(INPUT_DIM),
+        "y_mean": torch.zeros(TARGET_DIM), "y_std": torch.ones(TARGET_DIM),
+        "log_targets": ["rho", "T"],
+    }, str(out))
+    assert SU2NormStats.load(out).targets == TARGET_ORDER
 
 
 # ============================================================================================

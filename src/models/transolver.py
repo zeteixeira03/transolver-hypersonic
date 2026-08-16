@@ -209,11 +209,14 @@ class TransolverBlock(nn.Module):
             self.ln_3 = nn.LayerNorm(hidden_dim)
             self.head = nn.Linear(hidden_dim, out_dim)
 
-    def forward(self, fx: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, fx: torch.Tensor, return_hidden: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         fx = self.attn(self.ln_1(fx)) + fx
         fx = self.mlp(self.ln_2(fx)) + fx
         if self.last_layer:
-            return self.head(self.ln_3(fx))
+            out = self.head(self.ln_3(fx))
+            return (out, fx) if return_hidden else out
         return fx
 
 
@@ -262,6 +265,10 @@ class Transolver(nn.Module):
         Resolution of the reference grid along each axis.
     grid_bounds : tuple of float
         Reference-grid bounds (xmin, xmax, ymin, ymax). 2D only for now.
+    qw_head : bool
+        Add a case-level scalar head for stagnation wall heat flux, read off
+        a mean-pool of the final hidden features. When set, ``forward``
+        returns ``(per_point, scalar)`` instead of just the per-point tensor.
     """
 
     def __init__(
@@ -279,6 +286,7 @@ class Transolver(nn.Module):
         unified_pos: bool = False,
         grid_ref: int = 8,
         grid_bounds: tuple[float, float, float, float] = (-2.0, 4.0, -1.5, 1.5),
+        qw_head: bool = False,
     ) -> None:
         super().__init__()
         self.space_dim = space_dim
@@ -307,6 +315,13 @@ class Transolver(nn.Module):
                 )
                 for i in range(n_layers)
             ]
+        )
+
+        # mean-pooling is scale-free in the node count, so the 8192-node
+        # training subsample estimates the same statistic as the full mesh
+        # used at eval time.
+        self.qw_head = (
+            MLP(n_hidden, n_hidden, 1, n_layers=1, act=act) if qw_head else None
         )
 
         self.placeholder = nn.Parameter((1.0 / n_hidden) * torch.rand(n_hidden))
@@ -355,7 +370,7 @@ class Transolver(nn.Module):
         self,
         x: torch.Tensor,
         pos: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """
         Parameters
         ----------
@@ -369,7 +384,9 @@ class Transolver(nn.Module):
         Returns
         -------
         torch.Tensor
-            Per-point predictions of shape (B, N, out_dim).
+            Per-point predictions of shape (B, N, out_dim). When the model
+            was built with ``qw_head``, returns that tensor paired with a
+            per-case scalar of shape (B,).
         """
         if self.unified_pos:
             if pos is None:
@@ -377,6 +394,10 @@ class Transolver(nn.Module):
             x = torch.cat((x, self._build_grid_features(pos)), dim=-1)
 
         fx = self.preprocess(x) + self.placeholder[None, None, :]
-        for block in self.blocks:
+        for block in self.blocks[:-1]:
             fx = block(fx)
-        return fx
+        if self.qw_head is None:
+            return self.blocks[-1](fx)
+
+        out, hidden = self.blocks[-1](fx, return_hidden=True)
+        return out, self.qw_head(hidden.mean(dim=1)).squeeze(-1)
