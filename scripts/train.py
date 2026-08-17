@@ -598,6 +598,17 @@ def evaluate(
                 "qw_pred": None,
             }
 
+            # rho, T and p are positive by physics. rel-L2 in physical units
+            # barely penalises a negative freestream density (the magnitudes
+            # there are tiny) yet such a field is unusable: it makes p = rho R T
+            # negative. log-space channels cannot go nonpositive at all, so
+            # this column is where that guarantee shows up.
+            for j, ch_name in enumerate(targets):
+                if ch_name in ("rho", "T", "p"):
+                    rec[f"frac_nonpos_{ch_name}"] = float(
+                        (pred[:, j] <= 0).float().mean()
+                    )
+
             if "p" in targets:
                 p_free = pred[:, targets.index("p")]
                 p_eos = (pred[:, targets.index("rho")] * R_SPECIFIC_AIR
@@ -669,6 +680,11 @@ def evaluate(
     eos = [r["eos_viol"] for r in per_case if "eos_viol" in r]
     if eos:
         out["eos_viol_median"] = float(np.median(eos))
+    for ch_name in ("rho", "T", "p"):
+        key = f"frac_nonpos_{ch_name}"
+        vals = [r[key] for r in per_case if key in r]
+        if vals:
+            out[f"{key}_mean"] = float(np.mean(vals))
     return out, per_case
 
 

@@ -216,9 +216,18 @@ def test_qw_median_is_none_without_records():
     assert qw_abs_rel_median([{"qw_true": 1.0}], "qw_head_pred", "qw_ledger") is None
 
 
+def test_nonphysical_column_surfaces_negative_density():
+    """The column that stops rel-L2 ranking an unusable field first."""
+    valid = {"n_train": 100, "interp": 0.15, "family": 0.15, "ood": 0.3,
+             "qw_posthoc": 0.3, "qw_head": None, "eos_viol": 0.0, "nonpos": 0.0}
+    better_but_broken = dict(valid, interp=0.09, family=0.09, nonpos=0.0233)
+    table = render_table({"base": [valid], "plain_norm": [better_but_broken]})
+    assert "0.0233" in table, "negative-density fraction must reach the table"
+
+
 def test_render_table_marks_missing_values():
     run = {"n_train": 100, "interp": 0.1, "family": 0.2, "ood": None,
-           "qw_posthoc": 0.3, "qw_head": None, "eos_viol": 0.0}
+           "qw_posthoc": 0.3, "qw_head": None, "eos_viol": 0.0, "nonpos": 0.0}
     table = render_table({"base": [run]})
     assert "n_train = [100]" in table
     assert "| -- |" in table
@@ -226,7 +235,7 @@ def test_render_table_marks_missing_values():
 
 def test_render_table_reports_spread_across_seeds():
     runs = [{"n_train": 100, "interp": v, "family": 0.2, "ood": 0.3,
-             "qw_posthoc": 0.3, "qw_head": None, "eos_viol": 0.0}
+             "qw_posthoc": 0.3, "qw_head": None, "eos_viol": 0.0, "nonpos": 0.0}
             for v in (0.10, 0.20)]
     table = render_table({"base": runs})
     assert "0.1500 +/- 0.0500" in table

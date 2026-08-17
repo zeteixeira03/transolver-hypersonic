@@ -209,6 +209,13 @@ def summarize_run(run_dir: Path) -> dict:
         out["rL2_p"] = tier_mean_rl2(per_case["test"], ("p",))
     eos = [r["eos_viol"] for r in in_dist if "eos_viol" in r]
     out["eos_viol"] = float(np.median(eos)) if eos else 0.0
+    # worst offender across the positive-definite channels. rel-L2 hardly
+    # notices a negative freestream density, so without this column the table
+    # ranks an unusable field above a valid one.
+    nonpos = [max(r.get(f"frac_nonpos_{c}", 0.0) for c in ("rho", "T", "p"))
+              for r in in_dist
+              if any(f"frac_nonpos_{c}" in r for c in ("rho", "T", "p"))]
+    out["nonpos"] = float(np.mean(nonpos)) if nonpos else None
     return out
 
 
@@ -242,8 +249,9 @@ def render_table(by_cell: dict[str, list[dict]]) -> str:
         "column down its own cells, never across.\n\n"
     )
     lines = [
-        "| prior cell | interpolation | family holdout | OOD pooled | q_w post-hoc | q_w head | EoS violation |",
-        "|---|---|---|---|---|---|---|",
+        "| prior cell | interpolation | family holdout | OOD pooled | q_w post-hoc "
+        "| q_w head | EoS violation | nonphysical |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for cell in CELL_ORDER:
         runs = by_cell.get(cell)
@@ -256,7 +264,8 @@ def render_table(by_cell: dict[str, list[dict]]) -> str:
             f"| {_cell([r['ood'] for r in runs])} "
             f"| {_cell([r['qw_posthoc'] for r in runs])} "
             f"| {_cell([r['qw_head'] for r in runs])} "
-            f"| {_cell([r['eos_viol'] for r in runs])} |"
+            f"| {_cell([r['eos_viol'] for r in runs])} "
+            f"| {_cell([r['nonpos'] for r in runs])} |"
         )
     extra = [c for c in by_cell if c not in CELL_ORDER]
     for cell in sorted(extra):
@@ -267,7 +276,8 @@ def render_table(by_cell: dict[str, list[dict]]) -> str:
             f"| {_cell([r['ood'] for r in runs])} "
             f"| {_cell([r['qw_posthoc'] for r in runs])} "
             f"| {_cell([r['qw_head'] for r in runs])} "
-            f"| {_cell([r['eos_viol'] for r in runs])} |"
+            f"| {_cell([r['eos_viol'] for r in runs])} "
+            f"| {_cell([r['nonpos'] for r in runs])} |"
         )
     return header + "\n".join(lines) + "\n"
 
