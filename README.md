@@ -22,9 +22,10 @@ dataset to 753.
 On the modeling side, a first Transolver reproduces held-out flow fields
 (`data/samples/field_prediction.png` shows predicted vs SU2 primitives on an
 unseen case). A slice-count ablation, a five-member deep ensemble with
-calibrated uncertainty, and the before/after on the active-learning cases
-are all in the results below, evaluated against every out-of-distribution
-slab including the high-Mach one.
+calibrated uncertainty, the before/after on the active-learning cases, and an
+ablation pricing the physics priors in a 100-case regime are all in the
+results below, evaluated against every out-of-distribution slab including the
+high-Mach one.
 
 ## Evaluation questions
 
@@ -194,6 +195,87 @@ consensus errors, the failure mode above. The out-of-distribution gains are
 worth noting but not over-reading: acquisition ran in-box only, so nothing
 targeted those slabs, and nose_small rests on 8 cases.
 
+### Physics priors in the low-data regime
+
+Three physics priors are built into the surrogate. Pressure is reconstructed
+from the equation of state rather than predicted, density and temperature are
+standardized in log10 space, and wall heat flux is available either as a
+direct prediction or as a residual against the Fay-Riddell correlation. Each
+was switched off in turn and priced against a baseline carrying all three.
+
+Priors are supposed to earn their place when data is scarce, so the training
+split is 100 cases drawn from the core box, stratified by geometry and
+excluding the active-learning cases, which were selected adaptively and are
+not an iid sample. The evaluation tiers are pinned to the same case lists
+used everywhere else in this README and stay at full size, so only the
+training set is small. Three seeds per cell, 500 epochs with cosine decay.
+That schedule differs from the 350-epoch constant-rate recipe used for the
+ensemble results above, so these rows are comparable to each other and not to
+the numbers elsewhere on this page.
+
+n_train = 100, mean +/- standard deviation over 3 seeds. Relative L2 is
+averaged over (rho, u, v, T) so a cell predicting a fifth channel is scored
+on the same four as the rest.
+
+| prior cell | interpolation | family holdout | OOD pooled | q_w error | EoS violation | nonphysical |
+|---|---|---|---|---|---|---|
+| baseline (hard EoS, log rho/T) | 0.118 +/- 0.008 | 0.138 +/- 0.012 | 0.313 +/- 0.014 | -- | 0 | 0 |
+| free p channel | 0.123 +/- 0.001 | 0.145 +/- 0.006 | 0.356 +/- 0.018 | -- | 0.0032 | 0 |
+| plain standardization | 0.095 +/- 0.004 | 0.106 +/- 0.005 | 0.286 +/- 0.017 | -- | 0 | 0.023 |
+| q_w head, direct | 0.128 +/- 0.003 | 0.153 +/- 0.004 | 0.327 +/- 0.018 | 0.075 +/- 0.004 | 0 | 0 |
+| q_w head, Fay-Riddell residual | 0.151 +/- 0.002 | 0.171 +/- 0.007 | 0.331 +/- 0.005 | 0.061 +/- 0.006 | 0 | 0 |
+
+`EoS violation` is the median relative departure from `p = rho R T`, which is
+identically zero whenever pressure is reconstructed instead of predicted.
+`nonphysical` is the fraction of held-out nodes where a channel that physics
+requires to be positive (density, temperature, or reconstructed pressure)
+comes out zero or negative, taking the worst such channel per case. `q_w error` is the median relative error of the heat-flux
+head against the solver's own wall heat flux and exists only for the two
+cells that have a head.
+
+The normalization row is the one that does not say what the accuracy column
+alone suggests. Plain standardization is more accurate on every tier and in
+every seed, and the entire gap sits in density: 0.15 against 0.30 relative L2
+on that channel, with the other three primitives indistinguishable. It also
+predicts nonpositive density on about 2% of held-out nodes in every seed, and
+temperature goes negative too, on a further 0.4%. In its worst single case
+that reaches 37% of nodes in distribution and 61% once the extrapolation
+slabs are included, which makes the reconstructed pressure negative and the
+field useless downstream. A log-space channel
+cannot do this at all, because exponentiating always lands positive. Relative
+L2 barely notices, since the offending nodes sit in the thin freestream where
+magnitudes are small and squared error is dominated by the shock layer. So
+the log prior is not buying accuracy on this metric, it is buying a guarantee,
+and a metric that only measures accuracy ranks a physically invalid field
+first. The size of the accuracy penalty is also seed-dependent, ranging from
+0.012 to 0.039 across the three seeds, while the nonphysical fraction holds
+steady near 2%.
+
+Hard equation-of-state reconstruction costs nothing worth having. Letting the
+network predict pressure freely is no better in distribution, consistently
+worse out of it, and buys a 0.32% median departure from the equation of
+state. The constraint stays.
+
+The Fay-Riddell residual head is a genuine trade rather than a free win.
+Pairing by seed, it beats direct heat-flux prediction in three of three, by
+19% on average, and the smallest of those margins is still wider than either
+arm's seed-to-seed spread. It also degrades the flow field in three of three,
+by more than the same spread. Anchoring the head to an analytical correlation
+helps the quantity it anchors and pulls capacity away from the rest.
+
+One caveat on how heat flux is measured here. The head is trained against the
+solver's own wall heat flux and scored against it. The post-hoc estimate used
+elsewhere in this README instead finite-differences the predicted temperature
+field, and the two disagree by a median factor of about 27 on this dataset,
+the finite-difference value being the smaller. That estimator is accurate on
+the fine canonical mesh but underresolves the near-wall gradient at sweep
+resolution. It remains a valid relative comparison, since predicted and true
+fields pass through the same estimator, but it is not a physical heat flux
+and the two numbers are not interchangeable.
+
+Reproduce with `scripts/prior_ablation.py`, which builds the pinned split and
+renders the table from the committed per-run records.
+
 ## Validating the stack on AirfRANS
 
 Transolver (0.52M parameters, 4 blocks, 32 slices, 8 heads, 128 hidden)
@@ -305,6 +387,7 @@ src/
   models/transolver.py     # vendored Transolver (MIT, thuml/Transolver)
 configs/
   sphere_cone_template.cfg # SU2 axisymmetric laminar NS template
+  prior_splits_100.json    # pinned low-data split for the prior ablation
 scripts/
   validate_cfd.py          # single-case SU2 validation driver
   generate_dataset.py      # resumable dataset sweep runner
@@ -314,6 +397,7 @@ scripts/
   acquire_loop.py          # active-learning acquisition scan over the box
   run_loop_cases.py        # drives the acquired cases through SU2
   loop_report.py           # before/after report for the loop iteration
+  prior_ablation.py        # physics-prior split builder and results table
 notebooks/
   01_validate_stack.ipynb  # AirfRANS validation, Kaggle orchestrator
   02_train_su2.ipynb       # SU2 training runs, Kaggle orchestrator

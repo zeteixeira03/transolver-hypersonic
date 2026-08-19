@@ -1,0 +1,526 @@
+$ /usr/bin/python3 scripts/train.py --workdir /kaggle/working/su2_data --pinned-splits /kaggle/working/transolver-hypersonic/configs/prior_splits_100.json --out /kaggle/working/run_qw_direct_s1 --slice-num 32 --epochs 500 --lr-schedule cosine --val-every 10 --seed 0 --init-seed 1 --qw-head direct
+
+[preflight] Tesla T4, compute capability 7.5, 2 device(s)
+[main] split seed 0, init seed 1
+[main] found 753 case.npz files under /kaggle/working/su2_data
+[pinned] applied 4 pinned split(s) from /kaggle/working/transolver-hypersonic/configs/prior_splits_100.json
+[split] train: 100 cases
+[split] val: 67 cases
+[split] test: 65 cases
+[split] test_interp: 54 cases
+[split] ood_cone_high: 14 cases
+[split] ood_mach_high: 18 cases
+[split] ood_nose_large: 20 cases
+[split] ood_nose_small: 8 cases
+[priors] targets=['rho', 'u', 'v', 'T'] log=['rho', 'T'] qw_head=direct
+[priors] q_w head on 100/100 train cases, log-target mean=6.536 std=0.471
+[main] norm stats fit on 100 train cases, saved
+[main] model: 538,917 params, slice_num=32
+[ep    1] loss=0.8862
+[ep    2] loss=0.6187
+[ep    3] loss=0.5403
+[ep    4] loss=0.4511
+[ep    5] loss=0.4355
+[ep    6] loss=0.3905
+[ep    7] loss=0.3755
+[ep    8] loss=0.3580
+[ep    9] loss=0.3434
+[ep   10] loss=0.3096 val_mean_rL2=0.6001 val={'rL2_rho': 0.8407912040824321, 'rL2_u': 0.3395379419202235, 'rL2_v': 0.554770227688462, 'rL2_T': 0.6651726627527778, 'qw_rel_err_mean': 16.389375616722386, 'qw_rel_err_median': -0.6996372997403675, 'qw_abs_rel_err_median': 0.9114589030840896, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.13458137820444205, 'qw_head_abs_rel_err_median': 0.1878707491740926, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep   11] loss=0.3022
+[ep   12] loss=0.2867
+[ep   13] loss=0.3257
+[ep   14] loss=0.2574
+[ep   15] loss=0.2541
+[ep   16] loss=0.2718
+[ep   17] loss=0.2729
+[ep   18] loss=0.2196
+[ep   19] loss=0.2524
+[ep   20] loss=0.2428 val_mean_rL2=0.4567 val={'rL2_rho': 0.7862905112665091, 'rL2_u': 0.21461166864010825, 'rL2_v': 0.3555289595874388, 'rL2_T': 0.4703008772721931, 'qw_rel_err_mean': 9.769198955890664, 'qw_rel_err_median': 1.1207191408550066, 'qw_abs_rel_err_median': 1.1207191408550066, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.06537959795057591, 'qw_head_abs_rel_err_median': 0.15379832445804725, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep   21] loss=0.2285
+[ep   22] loss=0.2209
+[ep   23] loss=0.2201
+[ep   24] loss=0.2189
+[ep   25] loss=0.2166
+[ep   26] loss=0.1797
+[ep   27] loss=0.1933
+[ep   28] loss=0.1752
+[ep   29] loss=0.1817
+[ep   30] loss=0.1901 val_mean_rL2=0.4446 val={'rL2_rho': 0.7733759799999977, 'rL2_u': 0.1920209255681109, 'rL2_v': 0.34480452181688, 'rL2_T': 0.4680099678573324, 'qw_rel_err_mean': 13.952677070198924, 'qw_rel_err_median': 0.1494115040860508, 'qw_abs_rel_err_median': 0.8185116604715014, 'n_qw_cases': 67, 'qw_head_rel_err_median': 0.001243225606478153, 'qw_head_abs_rel_err_median': 0.15558337399814387, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep   31] loss=0.1685
+[ep   32] loss=0.1673
+[ep   33] loss=0.1676
+[ep   34] loss=0.1824
+[ep   35] loss=0.1576
+[ep   36] loss=0.1631
+[ep   37] loss=0.1491
+[ep   38] loss=0.1384
+[ep   39] loss=0.1432
+[ep   40] loss=0.1404 val_mean_rL2=0.3670 val={'rL2_rho': 0.7526292267130382, 'rL2_u': 0.14088097859674426, 'rL2_v': 0.2483420478763865, 'rL2_T': 0.32615582355812417, 'qw_rel_err_mean': 10.961446567873118, 'qw_rel_err_median': 1.9593183693000322, 'qw_abs_rel_err_median': 1.9593183693000322, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.05909370427500795, 'qw_head_abs_rel_err_median': 0.13431819006665477, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep   41] loss=0.1220
+[ep   42] loss=0.1126
+[ep   43] loss=0.1227
+[ep   44] loss=0.1260
+[ep   45] loss=0.1185
+[ep   46] loss=0.1066
+[ep   47] loss=0.1121
+[ep   48] loss=0.1073
+[ep   49] loss=0.1061
+[ep   50] loss=0.1060 val_mean_rL2=0.3548 val={'rL2_rho': 0.6898537109147257, 'rL2_u': 0.171049705303427, 'rL2_v': 0.2379993053514566, 'rL2_T': 0.32011205691899824, 'qw_rel_err_mean': 7.6050957547938625, 'qw_rel_err_median': 2.03809448824481, 'qw_abs_rel_err_median': 2.03809448824481, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.12448204992437996, 'qw_head_abs_rel_err_median': 0.26762403919454875, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep   51] loss=0.1072
+[ep   52] loss=0.1017
+[ep   53] loss=0.0980
+[ep   54] loss=0.1002
+[ep   55] loss=0.1029
+[ep   56] loss=0.0940
+[ep   57] loss=0.0957
+[ep   58] loss=0.0856
+[ep   59] loss=0.0887
+[ep   60] loss=0.0935 val_mean_rL2=0.3334 val={'rL2_rho': 0.6855930023228944, 'rL2_u': 0.1276475928390204, 'rL2_v': 0.21055212083147534, 'rL2_T': 0.30978535360364773, 'qw_rel_err_mean': 5.880372497834105, 'qw_rel_err_median': -0.47440058733408236, 'qw_abs_rel_err_median': 0.8430263244556186, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.22769386269905434, 'qw_head_abs_rel_err_median': 0.28462508809262155, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep   61] loss=0.0861
+[ep   62] loss=0.0751
+[ep   63] loss=0.0778
+[ep   64] loss=0.0766
+[ep   65] loss=0.0808
+[ep   66] loss=0.0764
+[ep   67] loss=0.0680
+[ep   68] loss=0.0773
+[ep   69] loss=0.0759
+[ep   70] loss=0.0703 val_mean_rL2=0.3048 val={'rL2_rho': 0.6057642418057171, 'rL2_u': 0.13648541204964937, 'rL2_v': 0.19642717713740335, 'rL2_T': 0.2804008444298559, 'qw_rel_err_mean': 9.082943920556199, 'qw_rel_err_median': 2.837109121305073, 'qw_abs_rel_err_median': 2.837109121305073, 'n_qw_cases': 67, 'qw_head_rel_err_median': 0.18133164073718974, 'qw_head_abs_rel_err_median': 0.23059770922927764, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep   71] loss=0.0602
+[ep   72] loss=0.0651
+[ep   73] loss=0.0611
+[ep   74] loss=0.0713
+[ep   75] loss=0.0787
+[ep   76] loss=0.0662
+[ep   77] loss=0.0621
+[ep   78] loss=0.0658
+[ep   79] loss=0.0668
+[ep   80] loss=0.0610 val_mean_rL2=0.2773 val={'rL2_rho': 0.5786875953425222, 'rL2_u': 0.12326960009870244, 'rL2_v': 0.17533589465849436, 'rL2_T': 0.23176179937462307, 'qw_rel_err_mean': 6.945402579296602, 'qw_rel_err_median': -0.833564787945228, 'qw_abs_rel_err_median': 0.9471140020250266, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.08721944238586, 'qw_head_abs_rel_err_median': 0.11065266568486903, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep   81] loss=0.0558
+[ep   82] loss=0.0543
+[ep   83] loss=0.0560
+[ep   84] loss=0.0513
+[ep   85] loss=0.0567
+[ep   86] loss=0.0502
+[ep   87] loss=0.0502
+[ep   88] loss=0.0588
+[ep   89] loss=0.0495
+[ep   90] loss=0.0493 val_mean_rL2=0.2668 val={'rL2_rho': 0.5843251347541809, 'rL2_u': 0.11413089391678127, 'rL2_v': 0.1604053785107029, 'rL2_T': 0.20827166736125946, 'qw_rel_err_mean': 6.640138738384048, 'qw_rel_err_median': 1.634606522050897, 'qw_abs_rel_err_median': 1.634606522050897, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.027979449409355858, 'qw_head_abs_rel_err_median': 0.06966272081559034, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep   91] loss=0.0553
+[ep   92] loss=0.0501
+[ep   93] loss=0.0472
+[ep   94] loss=0.0485
+[ep   95] loss=0.0470
+[ep   96] loss=0.0498
+[ep   97] loss=0.0473
+[ep   98] loss=0.0505
+[ep   99] loss=0.0492
+[ep  100] loss=0.0454 val_mean_rL2=0.2544 val={'rL2_rho': 0.5357983201297362, 'rL2_u': 0.09930652263226794, 'rL2_v': 0.17258641724266224, 'rL2_T': 0.21001623860046045, 'qw_rel_err_mean': 3.8633007197554976, 'qw_rel_err_median': -0.48899188643378594, 'qw_abs_rel_err_median': 0.8871400223516112, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.02900503310569208, 'qw_head_abs_rel_err_median': 0.061154382282810685, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  101] loss=0.0460
+[ep  102] loss=0.0443
+[ep  103] loss=0.0389
+[ep  104] loss=0.0440
+[ep  105] loss=0.0497
+[ep  106] loss=0.0369
+[ep  107] loss=0.0429
+[ep  108] loss=0.0426
+[ep  109] loss=0.0400
+[ep  110] loss=0.0466 val_mean_rL2=0.2467 val={'rL2_rho': 0.5389550757497105, 'rL2_u': 0.09396415392854321, 'rL2_v': 0.15131269895763538, 'rL2_T': 0.20253791548867725, 'qw_rel_err_mean': 4.6603218631819345, 'qw_rel_err_median': -0.06974001445492069, 'qw_abs_rel_err_median': 0.9152475463195747, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.0292077525703633, 'qw_head_abs_rel_err_median': 0.10387760442026607, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  111] loss=0.0450
+[ep  112] loss=0.0414
+[ep  113] loss=0.0416
+[ep  114] loss=0.0414
+[ep  115] loss=0.0414
+[ep  116] loss=0.0363
+[ep  117] loss=0.0449
+[ep  118] loss=0.0390
+[ep  119] loss=0.0380
+[ep  120] loss=0.0384 val_mean_rL2=0.2418 val={'rL2_rho': 0.5165694222521426, 'rL2_u': 0.09005576255383776, 'rL2_v': 0.1575191470224466, 'rL2_T': 0.20311105306913604, 'qw_rel_err_mean': 4.635616297037689, 'qw_rel_err_median': 1.3011982989557558, 'qw_abs_rel_err_median': 1.3011982989557558, 'n_qw_cases': 67, 'qw_head_rel_err_median': 0.00611876224817892, 'qw_head_abs_rel_err_median': 0.08239068023257481, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  121] loss=0.0367
+[ep  122] loss=0.0486
+[ep  123] loss=0.0359
+[ep  124] loss=0.0349
+[ep  125] loss=0.0389
+[ep  126] loss=0.0358
+[ep  127] loss=0.0332
+[ep  128] loss=0.0367
+[ep  129] loss=0.0401
+[ep  130] loss=0.0373 val_mean_rL2=0.2211 val={'rL2_rho': 0.4973749847554449, 'rL2_u': 0.08846185662185968, 'rL2_v': 0.13537478480321258, 'rL2_T': 0.1632170326896568, 'qw_rel_err_mean': 6.057886123670931, 'qw_rel_err_median': 3.0652527153447475, 'qw_abs_rel_err_median': 3.0652527153447475, 'n_qw_cases': 67, 'qw_head_rel_err_median': 0.08674101417619363, 'qw_head_abs_rel_err_median': 0.11094093813280859, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  131] loss=0.0356
+[ep  132] loss=0.0391
+[ep  133] loss=0.0316
+[ep  134] loss=0.0303
+[ep  135] loss=0.0312
+[ep  136] loss=0.0291
+[ep  137] loss=0.0369
+[ep  138] loss=0.0334
+[ep  139] loss=0.0325
+[ep  140] loss=0.0409 val_mean_rL2=0.2427 val={'rL2_rho': 0.4957207588117514, 'rL2_u': 0.10126191294237749, 'rL2_v': 0.1713589839081266, 'rL2_T': 0.20241654808841533, 'qw_rel_err_mean': 4.793940193506226, 'qw_rel_err_median': -0.22187918567346543, 'qw_abs_rel_err_median': 0.7361350153683165, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.0050726401946200785, 'qw_head_abs_rel_err_median': 0.06331861006355684, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  141] loss=0.0294
+[ep  142] loss=0.0331
+[ep  143] loss=0.0297
+[ep  144] loss=0.0304
+[ep  145] loss=0.0279
+[ep  146] loss=0.0276
+[ep  147] loss=0.0302
+[ep  148] loss=0.0310
+[ep  149] loss=0.0267
+[ep  150] loss=0.0302 val_mean_rL2=0.2116 val={'rL2_rho': 0.49134647823981387, 'rL2_u': 0.07933384330192608, 'rL2_v': 0.11704205265685694, 'rL2_T': 0.15885707635932894, 'qw_rel_err_mean': 5.6631581788121395, 'qw_rel_err_median': 3.672545430050653, 'qw_abs_rel_err_median': 3.672545430050653, 'n_qw_cases': 67, 'qw_head_rel_err_median': 0.09780129927572583, 'qw_head_abs_rel_err_median': 0.11358736991143596, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  151] loss=0.0298
+[ep  152] loss=0.0302
+[ep  153] loss=0.0311
+[ep  154] loss=0.0301
+[ep  155] loss=0.0312
+[ep  156] loss=0.0248
+[ep  157] loss=0.0289
+[ep  158] loss=0.0303
+[ep  159] loss=0.0245
+[ep  160] loss=0.0307 val_mean_rL2=0.2219 val={'rL2_rho': 0.4933787232904292, 'rL2_u': 0.08698353888605957, 'rL2_v': 0.13415269375737035, 'rL2_T': 0.17320893526966893, 'qw_rel_err_mean': 5.208729954653148, 'qw_rel_err_median': -0.20971455642927125, 'qw_abs_rel_err_median': 0.8792918575642498, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.08165780520603684, 'qw_head_abs_rel_err_median': 0.08889630490899761, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  161] loss=0.0257
+[ep  162] loss=0.0258
+[ep  163] loss=0.0273
+[ep  164] loss=0.0280
+[ep  165] loss=0.0335
+[ep  166] loss=0.0267
+[ep  167] loss=0.0301
+[ep  168] loss=0.0244
+[ep  169] loss=0.0230
+[ep  170] loss=0.0281 val_mean_rL2=0.2180 val={'rL2_rho': 0.47769068003590426, 'rL2_u': 0.08645794279317358, 'rL2_v': 0.1508504611565106, 'rL2_T': 0.15712282706552477, 'qw_rel_err_mean': 3.449826368543696, 'qw_rel_err_median': -0.2514065267560297, 'qw_abs_rel_err_median': 0.7791589979533163, 'n_qw_cases': 67, 'qw_head_rel_err_median': 0.005553189796720525, 'qw_head_abs_rel_err_median': 0.11041499760727408, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  171] loss=0.0285
+[ep  172] loss=0.0240
+[ep  173] loss=0.0261
+[ep  174] loss=0.0242
+[ep  175] loss=0.0248
+[ep  176] loss=0.0234
+[ep  177] loss=0.0218
+[ep  178] loss=0.0235
+[ep  179] loss=0.0232
+[ep  180] loss=0.0302 val_mean_rL2=0.2179 val={'rL2_rho': 0.4647799641338747, 'rL2_u': 0.08971680934304621, 'rL2_v': 0.13597052032822993, 'rL2_T': 0.1811314259669674, 'qw_rel_err_mean': 2.165567982932081, 'qw_rel_err_median': -0.5321563281263202, 'qw_abs_rel_err_median': 0.8700452849393626, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.07088282903846188, 'qw_head_abs_rel_err_median': 0.08393298305328503, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  181] loss=0.0235
+[ep  182] loss=0.0207
+[ep  183] loss=0.0197
+[ep  184] loss=0.0219
+[ep  185] loss=0.0209
+[ep  186] loss=0.0248
+[ep  187] loss=0.0217
+[ep  188] loss=0.0254
+[ep  189] loss=0.0259
+[ep  190] loss=0.0198 val_mean_rL2=0.1919 val={'rL2_rho': 0.464232783486594, 'rL2_u': 0.06712296079677432, 'rL2_v': 0.11085264757275581, 'rL2_T': 0.12552594426852554, 'qw_rel_err_mean': 2.5463353088315905, 'qw_rel_err_median': -0.02307151754192311, 'qw_abs_rel_err_median': 0.7019415362486117, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.0034991449080181663, 'qw_head_abs_rel_err_median': 0.08356010643798895, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  191] loss=0.0208
+[ep  192] loss=0.0248
+[ep  193] loss=0.0230
+[ep  194] loss=0.0194
+[ep  195] loss=0.0200
+[ep  196] loss=0.0218
+[ep  197] loss=0.0210
+[ep  198] loss=0.0199
+[ep  199] loss=0.0194
+[ep  200] loss=0.0190 val_mean_rL2=0.2029 val={'rL2_rho': 0.45133395715435937, 'rL2_u': 0.07892696837435907, 'rL2_v': 0.12745761215241988, 'rL2_T': 0.15389563476861412, 'qw_rel_err_mean': 1.7855164912982324, 'qw_rel_err_median': -0.7135070359808456, 'qw_abs_rel_err_median': 0.9429459469596397, 'n_qw_cases': 67, 'qw_head_rel_err_median': 0.018205080141849427, 'qw_head_abs_rel_err_median': 0.07181929419611612, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  201] loss=0.0229
+[ep  202] loss=0.0238
+[ep  203] loss=0.0210
+[ep  204] loss=0.0187
+[ep  205] loss=0.0170
+[ep  206] loss=0.0167
+[ep  207] loss=0.0210
+[ep  208] loss=0.0189
+[ep  209] loss=0.0180
+[ep  210] loss=0.0175 val_mean_rL2=0.1885 val={'rL2_rho': 0.4194670395175023, 'rL2_u': 0.07859076806969607, 'rL2_v': 0.1247713846613222, 'rL2_T': 0.1313665776110407, 'qw_rel_err_mean': 1.920585260202122, 'qw_rel_err_median': -0.16832254467991048, 'qw_abs_rel_err_median': 0.7493790591921125, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.07263766812992056, 'qw_head_abs_rel_err_median': 0.07875914030723376, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  211] loss=0.0219
+[ep  212] loss=0.0173
+[ep  213] loss=0.0166
+[ep  214] loss=0.0168
+[ep  215] loss=0.0175
+[ep  216] loss=0.0168
+[ep  217] loss=0.0215
+[ep  218] loss=0.0182
+[ep  219] loss=0.0163
+[ep  220] loss=0.0168 val_mean_rL2=0.1886 val={'rL2_rho': 0.43064920092696574, 'rL2_u': 0.07060538415810955, 'rL2_v': 0.11954655320341907, 'rL2_T': 0.13374433221656884, 'qw_rel_err_mean': 3.282499004896553, 'qw_rel_err_median': 0.34394167219544103, 'qw_abs_rel_err_median': 0.7715714972406343, 'n_qw_cases': 67, 'qw_head_rel_err_median': 0.023693877511526962, 'qw_head_abs_rel_err_median': 0.07205340965870534, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  221] loss=0.0168
+[ep  222] loss=0.0161
+[ep  223] loss=0.0215
+[ep  224] loss=0.0158
+[ep  225] loss=0.0162
+[ep  226] loss=0.0155
+[ep  227] loss=0.0172
+[ep  228] loss=0.0170
+[ep  229] loss=0.0146
+[ep  230] loss=0.0175 val_mean_rL2=0.1864 val={'rL2_rho': 0.4284770922429526, 'rL2_u': 0.07459385951619539, 'rL2_v': 0.11333100570004377, 'rL2_T': 0.1291224824737257, 'qw_rel_err_mean': 1.4721858829010033, 'qw_rel_err_median': -0.3765924124251987, 'qw_abs_rel_err_median': 0.7991547217213254, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.06583931728770012, 'qw_head_abs_rel_err_median': 0.08847476411918896, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  231] loss=0.0152
+[ep  232] loss=0.0178
+[ep  233] loss=0.0135
+[ep  234] loss=0.0153
+[ep  235] loss=0.0143
+[ep  236] loss=0.0134
+[ep  237] loss=0.0146
+[ep  238] loss=0.0156
+[ep  239] loss=0.0145
+[ep  240] loss=0.0149 val_mean_rL2=0.1955 val={'rL2_rho': 0.4152480392758526, 'rL2_u': 0.08053994921049965, 'rL2_v': 0.13439221563401507, 'rL2_T': 0.15182541672195962, 'qw_rel_err_mean': 2.1013946841672535, 'qw_rel_err_median': -0.051169105323311974, 'qw_abs_rel_err_median': 0.9401676595422914, 'n_qw_cases': 67, 'qw_head_rel_err_median': 0.00830244112354346, 'qw_head_abs_rel_err_median': 0.061347234422885165, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  241] loss=0.0141
+[ep  242] loss=0.0155
+[ep  243] loss=0.0138
+[ep  244] loss=0.0156
+[ep  245] loss=0.0138
+[ep  246] loss=0.0164
+[ep  247] loss=0.0174
+[ep  248] loss=0.0130
+[ep  249] loss=0.0155
+[ep  250] loss=0.0141 val_mean_rL2=0.1799 val={'rL2_rho': 0.42099783402770313, 'rL2_u': 0.06604784535271908, 'rL2_v': 0.10447730563247382, 'rL2_T': 0.12818120258735188, 'qw_rel_err_mean': 0.927054941309521, 'qw_rel_err_median': -0.46803308024100676, 'qw_abs_rel_err_median': 0.865767952130994, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.019858074809106164, 'qw_head_abs_rel_err_median': 0.05974734500320579, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  251] loss=0.0154
+[ep  252] loss=0.0125
+[ep  253] loss=0.0114
+[ep  254] loss=0.0138
+[ep  255] loss=0.0134
+[ep  256] loss=0.0151
+[ep  257] loss=0.0123
+[ep  258] loss=0.0129
+[ep  259] loss=0.0108
+[ep  260] loss=0.0133 val_mean_rL2=0.1981 val={'rL2_rho': 0.40794501019947566, 'rL2_u': 0.0864886008759043, 'rL2_v': 0.14863012742195555, 'rL2_T': 0.14949141642940578, 'qw_rel_err_mean': 0.6763918274334072, 'qw_rel_err_median': 0.11244712590302083, 'qw_abs_rel_err_median': 0.6620024987413357, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.045281167881773, 'qw_head_abs_rel_err_median': 0.07539893269632605, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  261] loss=0.0123
+[ep  262] loss=0.0160
+[ep  263] loss=0.0157
+[ep  264] loss=0.0114
+[ep  265] loss=0.0143
+[ep  266] loss=0.0119
+[ep  267] loss=0.0108
+[ep  268] loss=0.0129
+[ep  269] loss=0.0117
+[ep  270] loss=0.0106 val_mean_rL2=0.1803 val={'rL2_rho': 0.4378069785993491, 'rL2_u': 0.06137408368956687, 'rL2_v': 0.10528776394342308, 'rL2_T': 0.11684812344054678, 'qw_rel_err_mean': 2.343002744611416, 'qw_rel_err_median': 1.7622854595098034, 'qw_abs_rel_err_median': 1.7622854595098034, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.01437041364676977, 'qw_head_abs_rel_err_median': 0.0682861305537605, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  271] loss=0.0114
+[ep  272] loss=0.0123
+[ep  273] loss=0.0110
+[ep  274] loss=0.0116
+[ep  275] loss=0.0125
+[ep  276] loss=0.0089
+[ep  277] loss=0.0092
+[ep  278] loss=0.0103
+[ep  279] loss=0.0099
+[ep  280] loss=0.0111 val_mean_rL2=0.1639 val={'rL2_rho': 0.38297540661114365, 'rL2_u': 0.06311119331130341, 'rL2_v': 0.10216240807255703, 'rL2_T': 0.10726457984367413, 'qw_rel_err_mean': 0.9655885666152734, 'qw_rel_err_median': -0.14345527818162687, 'qw_abs_rel_err_median': 0.7671492232369371, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.020449843070271864, 'qw_head_abs_rel_err_median': 0.06733208736226334, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  281] loss=0.0108
+[ep  282] loss=0.0101
+[ep  283] loss=0.0101
+[ep  284] loss=0.0092
+[ep  285] loss=0.0092
+[ep  286] loss=0.0110
+[ep  287] loss=0.0100
+[ep  288] loss=0.0094
+[ep  289] loss=0.0098
+[ep  290] loss=0.0111 val_mean_rL2=0.1763 val={'rL2_rho': 0.41313014679880283, 'rL2_u': 0.06585038247615543, 'rL2_v': 0.10849268867898343, 'rL2_T': 0.11769624115593398, 'qw_rel_err_mean': 1.4379743766870334, 'qw_rel_err_median': -0.5284999492653292, 'qw_abs_rel_err_median': 0.9144739965179131, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.03643675103344915, 'qw_head_abs_rel_err_median': 0.06809622925231039, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  291] loss=0.0095
+[ep  292] loss=0.0087
+[ep  293] loss=0.0090
+[ep  294] loss=0.0095
+[ep  295] loss=0.0102
+[ep  296] loss=0.0093
+[ep  297] loss=0.0099
+[ep  298] loss=0.0088
+[ep  299] loss=0.0097
+[ep  300] loss=0.0082 val_mean_rL2=0.1654 val={'rL2_rho': 0.37962970115355593, 'rL2_u': 0.0665156980837459, 'rL2_v': 0.10258366317668957, 'rL2_T': 0.11289815382281346, 'qw_rel_err_mean': 0.8843276846030003, 'qw_rel_err_median': -0.4669330818717663, 'qw_abs_rel_err_median': 0.7965437505115412, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.059198306305117146, 'qw_head_abs_rel_err_median': 0.07788227606904395, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  301] loss=0.0097
+[ep  302] loss=0.0085
+[ep  303] loss=0.0079
+[ep  304] loss=0.0087
+[ep  305] loss=0.0117
+[ep  306] loss=0.0080
+[ep  307] loss=0.0096
+[ep  308] loss=0.0075
+[ep  309] loss=0.0075
+[ep  310] loss=0.0070 val_mean_rL2=0.1679 val={'rL2_rho': 0.38825999511711634, 'rL2_u': 0.06441042438816669, 'rL2_v': 0.10592188280242593, 'rL2_T': 0.11285246547255944, 'qw_rel_err_mean': 0.8938743349532166, 'qw_rel_err_median': -0.13275223845938325, 'qw_abs_rel_err_median': 0.852074071049143, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.033031607203378145, 'qw_head_abs_rel_err_median': 0.06276339739155601, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  311] loss=0.0073
+[ep  312] loss=0.0074
+[ep  313] loss=0.0073
+[ep  314] loss=0.0076
+[ep  315] loss=0.0073
+[ep  316] loss=0.0094
+[ep  317] loss=0.0081
+[ep  318] loss=0.0065
+[ep  319] loss=0.0076
+[ep  320] loss=0.0083 val_mean_rL2=0.1557 val={'rL2_rho': 0.3706836680422968, 'rL2_u': 0.05756146171644552, 'rL2_v': 0.09254746928588668, 'rL2_T': 0.10192289859501284, 'qw_rel_err_mean': 0.6651297638529983, 'qw_rel_err_median': -0.4778746460587775, 'qw_abs_rel_err_median': 0.8301687098159821, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.034446698216043035, 'qw_head_abs_rel_err_median': 0.06635431023476021, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  321] loss=0.0080
+[ep  322] loss=0.0069
+[ep  323] loss=0.0068
+[ep  324] loss=0.0085
+[ep  325] loss=0.0068
+[ep  326] loss=0.0067
+[ep  327] loss=0.0069
+[ep  328] loss=0.0066
+[ep  329] loss=0.0072
+[ep  330] loss=0.0063 val_mean_rL2=0.1616 val={'rL2_rho': 0.36340822824346486, 'rL2_u': 0.06553753179067107, 'rL2_v': 0.1072545890043031, 'rL2_T': 0.11029270030002096, 'qw_rel_err_mean': 1.1862669314848313, 'qw_rel_err_median': -0.1413787974114698, 'qw_abs_rel_err_median': 0.700686534882961, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.016562692210539774, 'qw_head_abs_rel_err_median': 0.0649003970212389, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  331] loss=0.0071
+[ep  332] loss=0.0067
+[ep  333] loss=0.0059
+[ep  334] loss=0.0056
+[ep  335] loss=0.0057
+[ep  336] loss=0.0059
+[ep  337] loss=0.0051
+[ep  338] loss=0.0057
+[ep  339] loss=0.0056
+[ep  340] loss=0.0082 val_mean_rL2=0.1570 val={'rL2_rho': 0.36442640490496336, 'rL2_u': 0.059643047208439055, 'rL2_v': 0.09869735404404241, 'rL2_T': 0.10532756716902576, 'qw_rel_err_mean': 1.1956340645686534, 'qw_rel_err_median': 0.22288833845721737, 'qw_abs_rel_err_median': 0.9390665094904415, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.04820065514469641, 'qw_head_abs_rel_err_median': 0.07232364075976057, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  341] loss=0.0058
+[ep  342] loss=0.0058
+[ep  343] loss=0.0056
+[ep  344] loss=0.0057
+[ep  345] loss=0.0060
+[ep  346] loss=0.0057
+[ep  347] loss=0.0062
+[ep  348] loss=0.0055
+[ep  349] loss=0.0060
+[ep  350] loss=0.0058 val_mean_rL2=0.1540 val={'rL2_rho': 0.35408851348642095, 'rL2_u': 0.05946479907342747, 'rL2_v': 0.09866029741381531, 'rL2_T': 0.10370414303754692, 'qw_rel_err_mean': 0.7067317113775011, 'qw_rel_err_median': -0.2534276696911987, 'qw_abs_rel_err_median': 0.7333105880084495, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.02484938845337193, 'qw_head_abs_rel_err_median': 0.055626495271234186, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  351] loss=0.0048
+[ep  352] loss=0.0069
+[ep  353] loss=0.0049
+[ep  354] loss=0.0055
+[ep  355] loss=0.0052
+[ep  356] loss=0.0051
+[ep  357] loss=0.0054
+[ep  358] loss=0.0052
+[ep  359] loss=0.0049
+[ep  360] loss=0.0046 val_mean_rL2=0.1563 val={'rL2_rho': 0.3490882529251611, 'rL2_u': 0.061576795333357, 'rL2_v': 0.10227436672395734, 'rL2_T': 0.11244917327343527, 'qw_rel_err_mean': 0.06358476731185793, 'qw_rel_err_median': -0.6205809502198882, 'qw_abs_rel_err_median': 0.7982790095689082, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.02711113904002059, 'qw_head_abs_rel_err_median': 0.0654729000384798, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  361] loss=0.0054
+[ep  362] loss=0.0054
+[ep  363] loss=0.0050
+[ep  364] loss=0.0046
+[ep  365] loss=0.0045
+[ep  366] loss=0.0043
+[ep  367] loss=0.0051
+[ep  368] loss=0.0045
+[ep  369] loss=0.0046
+[ep  370] loss=0.0042 val_mean_rL2=0.1520 val={'rL2_rho': 0.3467190196709846, 'rL2_u': 0.05777358121947566, 'rL2_v': 0.09786835568609523, 'rL2_T': 0.10561097324339312, 'qw_rel_err_mean': 0.6550144509696969, 'qw_rel_err_median': -0.07839293919183385, 'qw_abs_rel_err_median': 0.7084247239538436, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.03652400431176193, 'qw_head_abs_rel_err_median': 0.05989680038126959, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  371] loss=0.0047
+[ep  372] loss=0.0051
+[ep  373] loss=0.0040
+[ep  374] loss=0.0041
+[ep  375] loss=0.0043
+[ep  376] loss=0.0044
+[ep  377] loss=0.0048
+[ep  378] loss=0.0038
+[ep  379] loss=0.0041
+[ep  380] loss=0.0040 val_mean_rL2=0.1536 val={'rL2_rho': 0.35771621674744053, 'rL2_u': 0.058423640331559216, 'rL2_v': 0.09590489028105095, 'rL2_T': 0.10253286795384849, 'qw_rel_err_mean': 0.605093219027417, 'qw_rel_err_median': -0.14837677097488372, 'qw_abs_rel_err_median': 0.6494575026053585, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.045076071988621784, 'qw_head_abs_rel_err_median': 0.06469089229487643, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  381] loss=0.0038
+[ep  382] loss=0.0040
+[ep  383] loss=0.0039
+[ep  384] loss=0.0039
+[ep  385] loss=0.0039
+[ep  386] loss=0.0037
+[ep  387] loss=0.0039
+[ep  388] loss=0.0037
+[ep  389] loss=0.0038
+[ep  390] loss=0.0034 val_mean_rL2=0.1496 val={'rL2_rho': 0.3453158166871142, 'rL2_u': 0.0576479764266023, 'rL2_v': 0.09471092033964484, 'rL2_T': 0.10070601111250137, 'qw_rel_err_mean': 0.7278522173901674, 'qw_rel_err_median': -0.12666893285593908, 'qw_abs_rel_err_median': 0.6335925651445844, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.03976062461671795, 'qw_head_abs_rel_err_median': 0.06510887643067072, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  391] loss=0.0034
+[ep  392] loss=0.0034
+[ep  393] loss=0.0037
+[ep  394] loss=0.0033
+[ep  395] loss=0.0036
+[ep  396] loss=0.0036
+[ep  397] loss=0.0034
+[ep  398] loss=0.0040
+[ep  399] loss=0.0037
+[ep  400] loss=0.0035 val_mean_rL2=0.1532 val={'rL2_rho': 0.3538186452282009, 'rL2_u': 0.058159963867223975, 'rL2_v': 0.09722761884887716, 'rL2_T': 0.10348707037185555, 'qw_rel_err_mean': 0.6568294391789403, 'qw_rel_err_median': -0.3381120201537375, 'qw_abs_rel_err_median': 0.6760667369162919, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.03712895384501864, 'qw_head_abs_rel_err_median': 0.06723322928728757, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  401] loss=0.0037
+[ep  402] loss=0.0035
+[ep  403] loss=0.0030
+[ep  404] loss=0.0030
+[ep  405] loss=0.0032
+[ep  406] loss=0.0032
+[ep  407] loss=0.0032
+[ep  408] loss=0.0032
+[ep  409] loss=0.0031
+[ep  410] loss=0.0031 val_mean_rL2=0.1507 val={'rL2_rho': 0.3592377929989971, 'rL2_u': 0.055164318795858036, 'rL2_v': 0.09083740860779783, 'rL2_T': 0.09755333568622816, 'qw_rel_err_mean': 0.5961554371162486, 'qw_rel_err_median': -0.06508370998222418, 'qw_abs_rel_err_median': 0.5938185990675098, 'n_qw_cases': 66, 'qw_head_rel_err_median': -0.03900715509318404, 'qw_head_abs_rel_err_median': 0.060092138336292004, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  411] loss=0.0031
+[ep  412] loss=0.0030
+[ep  413] loss=0.0029
+[ep  414] loss=0.0028
+[ep  415] loss=0.0030
+[ep  416] loss=0.0030
+[ep  417] loss=0.0031
+[ep  418] loss=0.0028
+[ep  419] loss=0.0028
+[ep  420] loss=0.0027 val_mean_rL2=0.1537 val={'rL2_rho': 0.36746766106851064, 'rL2_u': 0.056493093787845394, 'rL2_v': 0.09190980180986781, 'rL2_T': 0.09906554216546799, 'qw_rel_err_mean': 0.4909826584155541, 'qw_rel_err_median': -0.41252064568539515, 'qw_abs_rel_err_median': 0.7207406945443656, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.025732805726435663, 'qw_head_abs_rel_err_median': 0.06817832748275261, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  421] loss=0.0030
+[ep  422] loss=0.0029
+[ep  423] loss=0.0029
+[ep  424] loss=0.0028
+[ep  425] loss=0.0027
+[ep  426] loss=0.0028
+[ep  427] loss=0.0028
+[ep  428] loss=0.0030
+[ep  429] loss=0.0026
+[ep  430] loss=0.0027 val_mean_rL2=0.1510 val={'rL2_rho': 0.3530390400495102, 'rL2_u': 0.05666856968135976, 'rL2_v': 0.09400215664350275, 'rL2_T': 0.1004067628241297, 'qw_rel_err_mean': 0.3260611880880992, 'qw_rel_err_median': -0.3738541968702224, 'qw_abs_rel_err_median': 0.6585227082485572, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.033987800142882815, 'qw_head_abs_rel_err_median': 0.06506996153424828, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  431] loss=0.0027
+[ep  432] loss=0.0025
+[ep  433] loss=0.0026
+[ep  434] loss=0.0027
+[ep  435] loss=0.0026
+[ep  436] loss=0.0025
+[ep  437] loss=0.0026
+[ep  438] loss=0.0025
+[ep  439] loss=0.0025
+[ep  440] loss=0.0024 val_mean_rL2=0.1512 val={'rL2_rho': 0.35669657076472666, 'rL2_u': 0.056090898519910094, 'rL2_v': 0.09216833378730425, 'rL2_T': 0.09996267608297404, 'qw_rel_err_mean': 0.6013339466064879, 'qw_rel_err_median': -0.17931138923191653, 'qw_abs_rel_err_median': 0.5987406182729375, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.027940536666684657, 'qw_head_abs_rel_err_median': 0.06285267856327681, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  441] loss=0.0023
+[ep  442] loss=0.0024
+[ep  443] loss=0.0024
+[ep  444] loss=0.0025
+[ep  445] loss=0.0024
+[ep  446] loss=0.0024
+[ep  447] loss=0.0023
+[ep  448] loss=0.0023
+[ep  449] loss=0.0024
+[ep  450] loss=0.0023 val_mean_rL2=0.1533 val={'rL2_rho': 0.3632076213608927, 'rL2_u': 0.05683298727302854, 'rL2_v': 0.09378765440031664, 'rL2_T': 0.09940215027821597, 'qw_rel_err_mean': 0.5982462981973669, 'qw_rel_err_median': -0.16353972139556383, 'qw_abs_rel_err_median': 0.5732513413737845, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.029954643870071247, 'qw_head_abs_rel_err_median': 0.0670325744128909, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  451] loss=0.0024
+[ep  452] loss=0.0023
+[ep  453] loss=0.0022
+[ep  454] loss=0.0023
+[ep  455] loss=0.0023
+[ep  456] loss=0.0023
+[ep  457] loss=0.0022
+[ep  458] loss=0.0023
+[ep  459] loss=0.0022
+[ep  460] loss=0.0023 val_mean_rL2=0.1519 val={'rL2_rho': 0.3578857470359375, 'rL2_u': 0.056313126612065445, 'rL2_v': 0.09383880327553001, 'rL2_T': 0.09971877348734372, 'qw_rel_err_mean': 0.5574054852879865, 'qw_rel_err_median': -0.2325134914161125, 'qw_abs_rel_err_median': 0.6323734614247788, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.031046192815990043, 'qw_head_abs_rel_err_median': 0.06528262029779383, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  461] loss=0.0023
+[ep  462] loss=0.0021
+[ep  463] loss=0.0022
+[ep  464] loss=0.0023
+[ep  465] loss=0.0023
+[ep  466] loss=0.0022
+[ep  467] loss=0.0023
+[ep  468] loss=0.0022
+[ep  469] loss=0.0021
+[ep  470] loss=0.0021 val_mean_rL2=0.1532 val={'rL2_rho': 0.3641628745331693, 'rL2_u': 0.056286107873849904, 'rL2_v': 0.09330859591267002, 'rL2_T': 0.099049707680051, 'qw_rel_err_mean': 0.5652837900636186, 'qw_rel_err_median': -0.11305115045982701, 'qw_abs_rel_err_median': 0.6041324398889448, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.03221889953127598, 'qw_head_abs_rel_err_median': 0.06573604786874503, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  471] loss=0.0021
+[ep  472] loss=0.0023
+[ep  473] loss=0.0022
+[ep  474] loss=0.0022
+[ep  475] loss=0.0021
+[ep  476] loss=0.0022
+[ep  477] loss=0.0022
+[ep  478] loss=0.0021
+[ep  479] loss=0.0022
+[ep  480] loss=0.0022 val_mean_rL2=0.1535 val={'rL2_rho': 0.36454421292934847, 'rL2_u': 0.05629482004902701, 'rL2_v': 0.09360925300019, 'rL2_T': 0.09953390801353242, 'qw_rel_err_mean': 0.5470270643888213, 'qw_rel_err_median': -0.1874176825964684, 'qw_abs_rel_err_median': 0.5959875708979852, 'n_qw_cases': 66, 'qw_head_rel_err_median': -0.03054361737687985, 'qw_head_abs_rel_err_median': 0.06504810041522394, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  481] loss=0.0021
+[ep  482] loss=0.0021
+[ep  483] loss=0.0021
+[ep  484] loss=0.0022
+[ep  485] loss=0.0021
+[ep  486] loss=0.0020
+[ep  487] loss=0.0021
+[ep  488] loss=0.0022
+[ep  489] loss=0.0021
+[ep  490] loss=0.0021 val_mean_rL2=0.1537 val={'rL2_rho': 0.3658485172399834, 'rL2_u': 0.056237699172056434, 'rL2_v': 0.09327673250392302, 'rL2_T': 0.09936775000237708, 'qw_rel_err_mean': 0.4975365385555671, 'qw_rel_err_median': -0.22928718699242898, 'qw_abs_rel_err_median': 0.600401473458465, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.031102868275029005, 'qw_head_abs_rel_err_median': 0.06512553188401876, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[ep  491] loss=0.0021
+[ep  492] loss=0.0021
+[ep  493] loss=0.0021
+[ep  494] loss=0.0021
+[ep  495] loss=0.0021
+[ep  496] loss=0.0022
+[ep  497] loss=0.0021
+[ep  498] loss=0.0020
+[ep  499] loss=0.0021
+[ep  500] loss=0.0021 val_mean_rL2=0.1535 val={'rL2_rho': 0.36514276355060177, 'rL2_u': 0.056265709310102816, 'rL2_v': 0.09321673270036925, 'rL2_T': 0.09927005404189451, 'qw_rel_err_mean': 0.47735728132265387, 'qw_rel_err_median': -0.23105644914949167, 'qw_abs_rel_err_median': 0.6126702921939254, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.031150817085620768, 'qw_head_abs_rel_err_median': 0.06515964808959028, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[main] best val mean_rL2 0.1496 at epoch 390 of 500
+[final] val: {'rL2_rho': 0.3453158166871142, 'rL2_u': 0.0576479764266023, 'rL2_v': 0.09471092033964484, 'rL2_T': 0.10070601111250137, 'qw_rel_err_mean': 0.7278522173901674, 'qw_rel_err_median': -0.12666893285593908, 'qw_abs_rel_err_median': 0.6335925651445844, 'n_qw_cases': 67, 'qw_head_rel_err_median': -0.03976062461671795, 'qw_head_abs_rel_err_median': 0.06510887643067072, 'n_qw_head_cases': 67, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[final] test: {'rL2_rho': 0.3530293008455863, 'rL2_u': 0.091197853993911, 'rL2_v': 0.08335026760513965, 'rL2_T': 0.1051316587970807, 'qw_rel_err_mean': 3.382817197280701, 'qw_rel_err_median': -0.2521541180915568, 'qw_abs_rel_err_median': 0.9527992857646681, 'n_qw_cases': 65, 'qw_head_rel_err_median': -0.031983270282648524, 'qw_head_abs_rel_err_median': 0.0978518102696659, 'n_qw_head_cases': 65, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[final] test_interp: {'rL2_rho': 0.32104954261470725, 'rL2_u': 0.051895363032127974, 'rL2_v': 0.07338122923479036, 'rL2_T': 0.08217036392953661, 'qw_rel_err_mean': 2.253308007918725, 'qw_rel_err_median': 0.5216174283144708, 'qw_abs_rel_err_median': 0.7495000320940959, 'n_qw_cases': 54, 'qw_head_rel_err_median': -0.028624642123080187, 'qw_head_abs_rel_err_median': 0.06277743636762233, 'n_qw_head_cases': 54, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[final] ood_cone_high: {'rL2_rho': 0.703422201531274, 'rL2_u': 0.26491273620298933, 'rL2_v': 0.2548349105886051, 'rL2_T': 0.24505056334393366, 'qw_rel_err_mean': 10.88422148785968, 'qw_rel_err_median': 3.645286912436954, 'qw_abs_rel_err_median': 3.645286912436954, 'n_qw_cases': 14, 'qw_head_rel_err_median': 0.12582426864798613, 'qw_head_abs_rel_err_median': 0.1488361592590227, 'n_qw_head_cases': 14, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[final] ood_mach_high: {'rL2_rho': 0.6126938511927923, 'rL2_u': 0.10200964183443123, 'rL2_v': 0.16383281474312147, 'rL2_T': 0.1604816276166174, 'qw_rel_err_mean': 3.9050849950007867, 'qw_rel_err_median': 2.264196689290745, 'qw_abs_rel_err_median': 2.264196689290745, 'n_qw_cases': 18, 'qw_head_rel_err_median': -0.11716585026423672, 'qw_head_abs_rel_err_median': 0.12419092825951539, 'n_qw_head_cases': 18, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[final] ood_nose_large: {'rL2_rho': 0.6023942410945893, 'rL2_u': 0.17279079984873533, 'rL2_v': 0.21295808628201485, 'rL2_T': 0.2614706441760063, 'qw_rel_err_mean': 1.978007271377751, 'qw_rel_err_median': 0.8149423433747593, 'qw_abs_rel_err_median': 0.9893096061613988, 'n_qw_cases': 20, 'qw_head_rel_err_median': -0.08828429542556215, 'qw_head_abs_rel_err_median': 0.13251208614117693, 'n_qw_head_cases': 20, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
+[final] ood_nose_small: {'rL2_rho': 0.5736325569450855, 'rL2_u': 0.1955389603972435, 'rL2_v': 0.2617112062871456, 'rL2_T': 0.3184311892837286, 'qw_rel_err_mean': 23.230911689639058, 'qw_rel_err_median': 22.04774772139725, 'qw_abs_rel_err_median': 22.04774772139725, 'n_qw_cases': 8, 'qw_head_rel_err_median': -0.014992177993300564, 'qw_head_abs_rel_err_median': 0.046963347014754075, 'n_qw_head_cases': 8, 'frac_nonpos_rho_mean': 0.0, 'frac_nonpos_T_mean': 0.0}
