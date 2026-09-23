@@ -17,7 +17,6 @@ dependencies = [
     "torch>=2.2",
     "einops>=0.7",
     "tqdm>=4.66",
-    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -32,25 +31,17 @@ cfd = [
     "pyvista>=0.43",
     "huggingface-hub>=0.20",
 ]
-# generation-only deps for a headless CFD box (Oracle A1): no torch, no airfrans
-gen = [
-    "numpy>=1.26",
-    "scipy>=1.11",
-    "matplotlib>=3.8",
-    "gmsh>=4.12",
-    "pyvista>=0.43",
-    "huggingface-hub>=0.20",
-]
 dev = [
     "pytest>=8.0",
     "ruff>=0.4",
 ]
 
 [tool.setuptools.packages.find]
-where = ["src"]
+include = ["src*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 
 [tool.ruff]
 line-length = 100
@@ -58,4 +49,7 @@ target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "W", "B", "UP"]
-ignore = ["E501"]
+ignore = ["E501", "B905"]
+
+[tool.ruff.lint.per-file-ignores]
+"notebooks/*" = ["E402", "E702"]

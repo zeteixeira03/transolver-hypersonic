@@ -33,9 +33,8 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.stats import qmc
 
-from src.analytical import knudsen_number
+from src.analytical import R_AIR, knudsen_number
 from src.cfd.runner import Case
-
 
 # ============================================================================================
 #                                   standard atmosphere
@@ -53,7 +52,6 @@ _ATM_LAYERS = [
     (71.0,  214.65,  -2.0,        3.956420),
 ]
 _G0 = 9.80665      # m/s^2
-_R_AIR = 287.058   # J/(kg K), the same value as GAS_CONSTANT in the SU2 template
 
 
 def us_standard_atmosphere(h_km: float) -> tuple[float, float, float]:
@@ -83,12 +81,12 @@ def us_standard_atmosphere(h_km: float) -> tuple[float, float, float]:
     dh = (h_km - base_h) * 1000.0  # m
     if abs(lapse) < 1e-9:
         T = base_T
-        p = base_p * np.exp(-_G0 * dh / (_R_AIR * base_T))
+        p = base_p * np.exp(-_G0 * dh / (R_AIR * base_T))
     else:
         lapse_si = lapse / 1000.0  # K/m
         T = base_T + lapse_si * dh
-        p = base_p * (T / base_T) ** (-_G0 / (_R_AIR * lapse_si))
-    return float(T), float(p), float(p / (_R_AIR * T))
+        p = base_p * (T / base_T) ** (-_G0 / (R_AIR * lapse_si))
+    return float(T), float(p), float(p / (R_AIR * T))
 
 
 # ============================================================================================
@@ -155,6 +153,19 @@ class CaseSpec:
 # ============================================================================================
 #                                       sampling
 # ============================================================================================
+
+def case_params(R_n: float, theta_c: float, R_b_ratio: float, R_s_ratio: float,
+                mach: float, altitude: float) -> dict[str, float]:
+    """Turn the six design axes into the eight parameters of a case.
+
+    Freestream temperature and pressure follow the altitude through the standard
+    atmosphere, and the wall temperature is the fixed ``T_WALL``.
+    """
+    T_inf, p_inf, _rho = us_standard_atmosphere(altitude)
+    R_b = R_b_ratio * R_n
+    return {"R_n": R_n, "theta_c_deg": theta_c, "R_b": R_b, "R_s": R_s_ratio * R_b,
+            "mach": mach, "T_inf": T_inf, "p_inf": p_inf, "T_w": T_WALL}
+
 
 def _scale(unit: np.ndarray, names: tuple[str, ...], box: dict) -> np.ndarray:
     out = np.empty_like(unit)

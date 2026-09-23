@@ -22,7 +22,7 @@ from src.analytical import (
     rayleigh_pitot_p02,
     sutherland_mu,
 )
-
+from src.eval.sanity import THETA_C_BILLIG_MAX, compare_to_analytical
 
 # ============================================================================================
 #                                       sutherland mu
@@ -146,7 +146,6 @@ def test_fay_riddell_rejects_subsonic():
 #                          standoff gate validity domain (theta_c)
 # ============================================================================================
 
-from src.eval.sanity import THETA_C_BILLIG_MAX, compare_to_analytical
 
 
 def _summary_with_bad_standoff(theta_c_deg):

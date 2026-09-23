@@ -5,20 +5,19 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+from src.analytical import knudsen_number
 from src.cfd import ledger as L
 from src.cfd.runner import Case
-from src.analytical import knudsen_number
 from src.data.sampler import (
-    KN_MAX,
-    CaseSpec,
     FS_BOX,
     GEOM_BOX,
+    KN_MAX,
     OOD_SLABS,
+    CaseSpec,
     partition,
     sample_cases,
     us_standard_atmosphere,
 )
-
 
 # ============================================================================================
 #                                   standard atmosphere

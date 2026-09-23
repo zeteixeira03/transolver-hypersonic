@@ -28,12 +28,11 @@ from __future__ import annotations
 
 import math
 
-
 # ============================================================================================
 #                                       air constants
 # ============================================================================================
 
-R_AIR = 287.05          # J/(kg K), specific gas constant for dry air
+R_AIR = 287.058         # J/(kg K), dry air, the GAS_CONSTANT of the SU2 template
 GAMMA_AIR = 1.4         # ratio of specific heats, calorically perfect
 CP_AIR = 1004.5         # J/(kg K), specific heat at constant pressure
 PR_AIR = 0.71           # Prandtl number, cold-wall laminar boundary layer

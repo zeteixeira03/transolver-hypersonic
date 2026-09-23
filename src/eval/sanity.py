@@ -32,7 +32,6 @@ from src.analytical import (
     sutherland_mu,
 )
 
-
 # ============================================================================================
 #                                       tolerances
 # ============================================================================================
@@ -297,13 +296,11 @@ def compute_q_w_from_T(
     # only off-wall nodes can serve as neighbours. the wall is isothermal, so a
     # second wall node carries no temperature difference and would flatten the
     # gradient
-    wall_set = set(wall_indices.tolist())
     fluid_mask = np.ones_like(x, dtype=bool)
     for idx in wall_indices:
         fluid_mask[idx] = False
     x_f, r_f = x[fluid_mask], r[fluid_mask]
     T_f = T[fluid_mask]
-    fluid_global = np.where(fluid_mask)[0]
 
     for i, idx in enumerate(stag_nodes):
         normal = _wall_normal(x, r, T, T_w, wall_indices, int(idx))

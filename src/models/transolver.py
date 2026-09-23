@@ -7,7 +7,7 @@ Tsinghua University). The reference paper is Wu et al., "Transolver: A Fast
 Transformer Solver for PDEs on General Geometries", ICML 2024,
 arXiv:2402.02366.
 
-Four differences from the reference implementation which matter to anyone who
+Five differences from the reference implementation matter to anyone who
 compares this file against the authors' repository:
 
 - ``forward`` takes plain tensors of shape (B, N, C) and an optional position
@@ -18,6 +18,8 @@ compares this file against the authors' repository:
 - Function-style helpers use snake_case. The PyTorch Module classes keep
   CamelCase, as PyTorch does.
 - An optional case-level head predicts stagnation wall heat flux.
+- The slice temperature enters as ``max(|t|, 0.1)``. The reference divides by
+  the raw learned value.
 
 Equation numbers refer to arXiv:2402.02366.
 """
@@ -28,7 +30,6 @@ import numpy as np
 import torch
 import torch.nn as nn
 from einops import rearrange
-
 
 # ============================================================================================
 #                                       activations
@@ -119,14 +120,11 @@ class PhysicsAttentionIrregularMesh(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        # the temperature is a free parameter and can reach zero, which would
-        # send the logits to infinity under float16 autocast. the floor of 0.1
-        # keeps the division bounded.
+        # the temperature is learned and must stay positive. the floor of 0.1 is
+        # active in trained checkpoints (values down to 0.087), so removing it
+        # changes their predictions.
         temp = self.temperature.abs().clamp_min(0.1)
-        # the softmax always runs in float32. float16 overflows here once the
-        # logits grow at all, which the temperature floor alone does not prevent.
-        slice_logits = (self.in_project_slice(x_mid) / temp).float()
-        slice_weights = self.softmax(slice_logits).to(fx_mid.dtype)  # (B, H, N, M)
+        slice_weights = self.softmax(self.in_project_slice(x_mid) / temp)  # (B, H, N, M)
         slice_norm = slice_weights.sum(2)  # (B, H, M), sum over points per slice
         slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
         slice_token = slice_token / (slice_norm + 1e-5)[:, :, :, None].repeat(
@@ -138,8 +136,7 @@ class PhysicsAttentionIrregularMesh(nn.Module):
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-        # float32 softmax, for the same overflow reason as the slice step
-        attn = self.dropout(self.softmax(dots.float()).to(q.dtype))
+        attn = self.dropout(self.softmax(dots))
         out_slice_token = torch.matmul(attn, v)  # (B, H, M, dim_head)
 
         # step 3: deslice. broadcast attended slice tokens back to points

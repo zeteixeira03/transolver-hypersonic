@@ -29,6 +29,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from src.eval.metrics import relative_l2
 
 # ============================================================================================
 #                                       column indices
@@ -36,7 +37,6 @@ from torch.utils.data import Dataset
 INPUT_COLS = slice(0, 7)
 TARGET_COLS = slice(7, 11)
 SURFACE_COL = 11
-INLET_COLS = slice(2, 4)
 
 
 # ============================================================================================
@@ -51,7 +51,7 @@ class NormStats:
     y_mean: torch.Tensor  # (4,)
     y_std: torch.Tensor   # (4,)
 
-    def to(self, device: torch.device) -> "NormStats":
+    def to(self, device: torch.device) -> NormStats:
         return NormStats(
             x_mean=self.x_mean.to(device),
             x_std=self.x_std.to(device),
@@ -199,3 +199,35 @@ def load_split(
 def denormalize_targets(y_norm: torch.Tensor, stats: NormStats) -> torch.Tensor:
     """Map a normalized prediction or target back to physical units."""
     return y_norm * stats.y_std.to(y_norm.device) + stats.y_mean.to(y_norm.device)
+
+
+# ============================================================================================
+#                                       evaluation
+# ============================================================================================
+
+@torch.no_grad()
+def evaluate_airfrans(model: torch.nn.Module, dataset: AirfRANSDataset, stats: NormStats,
+                      device: str) -> dict[str, float]:
+    """Mean relative L2 per channel over the held-out simulations, plus surface pressure.
+
+    Only pressure, channel 2, gets a surface score. No-slip holds both velocity
+    components and the turbulent viscosity near zero at the wall, so their
+    relative error there would divide by an almost empty norm.
+    """
+    model.eval()
+    per_sim, per_sim_surf = [], []
+    for i in range(len(dataset)):
+        item = dataset[i]
+        pred_norm = model(item["x"].unsqueeze(0).to(device),
+                          pos=item["pos"].unsqueeze(0).to(device)).squeeze(0)
+        pred = denormalize_targets(pred_norm, stats.to(device))
+        y_true = item["y_raw"].to(device)
+        surface = item["surface"].to(device)
+        per_sim.append(relative_l2(pred, y_true).cpu())
+        if surface.any():
+            per_sim_surf.append(relative_l2(pred[surface, 2:3], y_true[surface, 2:3])[0].cpu())
+    rl2 = torch.stack(per_sim).mean(dim=0)
+    out = {f"rL2_y{c}": float(rl2[c]) for c in range(rl2.shape[0])}
+    if per_sim_surf:
+        out["rL2_surf_p"] = float(torch.stack(per_sim_surf).mean())
+    return out

@@ -16,19 +16,17 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+import torch
 
-torch = pytest.importorskip("torch")
-
+from src.analytical import R_AIR
 from src.data.su2 import (
     CASE_PARAM_ORDER,
-    INPUT_DIM,
     N_CASE_PARAMS,
-    R_SPECIFIC_AIR,
-    SU2Dataset,
-    SU2NormStats,
-    TARGET_DIM,
+    POS_DIM,
     TARGET_ORDER,
     TARGET_ORDER_WITH_P,
+    SU2Dataset,
+    SU2NormStats,
     case_id_from_npz_path,
     compute_norm_stats,
     denormalize_targets,
@@ -43,7 +41,6 @@ from src.eval.sanity import (
     identify_wall_nodes,
     thermal_conductivity_air,
 )
-
 
 # ============================================================================================
 #                                       synthetic case helpers
@@ -79,8 +76,8 @@ def _synth_case(tmp_path: Path, name: str, n: int = 500, seed: int = 0) -> Path:
 # ============================================================================================
 
 def test_input_target_dims_are_consistent():
-    assert INPUT_DIM == 2 + N_CASE_PARAMS == 10
-    assert TARGET_DIM == 4
+    assert POS_DIM + N_CASE_PARAMS == 10
+    assert len(TARGET_ORDER) == 4
     assert len(CASE_PARAM_ORDER) == N_CASE_PARAMS
 
 
@@ -103,8 +100,8 @@ def test_stack_case_features_shapes(tmp_path):
     p = _synth_case(tmp_path, "case_0000", n=128)
     case = load_case_npz(p)
     feats, targets = stack_case_features(case)
-    assert feats.shape == (128, INPUT_DIM)
-    assert targets.shape == (128, TARGET_DIM)
+    assert feats.shape == (128, POS_DIM + N_CASE_PARAMS)
+    assert targets.shape == (128, len(TARGET_ORDER))
     # the case parameters broadcast: every node carries the same 8 trailing values
     assert np.allclose(feats[:, 2:], case["case_params"])
 
@@ -117,11 +114,11 @@ def test_stack_case_features_with_p_matches_ideal_gas(tmp_path):
     p = _synth_case(tmp_path, "case_0000", n=128)
     case = load_case_npz(p)
     _, targets = stack_case_features(case, with_p=True)
-    assert targets.shape == (128, TARGET_DIM + 1)
+    assert targets.shape == (128, len(TARGET_ORDER) + 1)
     # the fifth channel is the pressure the equation of state gives for the
     # stored density and temperature, so the free-channel layout trains against
     # exactly the pressure the default layout would reconstruct
-    assert np.allclose(targets[:, 4], case["rho"] * R_SPECIFIC_AIR * case["T"],
+    assert np.allclose(targets[:, 4], case["rho"] * R_AIR * case["T"],
                        rtol=1e-5)
     assert np.allclose(targets[:, :4], stack_case_features(case)[1])
 
@@ -130,16 +127,16 @@ def test_norm_stats_with_p_have_five_channels(tmp_path):
     paths = [_synth_case(tmp_path, f"case_{i:04d}", n=200, seed=i) for i in range(3)]
     stats = compute_norm_stats(paths, with_p=True)
     assert stats.targets == TARGET_ORDER_WITH_P
-    assert stats.y_mean.shape == (TARGET_DIM + 1,)
+    assert stats.y_mean.shape == (len(TARGET_ORDER) + 1,)
     assert stats.log_mask.tolist() == [True, False, False, True, True]
 
 
 def test_dataset_target_layout_follows_stats(tmp_path):
     paths = [_synth_case(tmp_path, f"case_{i:04d}", n=200, seed=i) for i in range(3)]
     ds = SU2Dataset(paths, compute_norm_stats(paths, with_p=True))
-    assert ds[0]["y"].shape[1] == TARGET_DIM + 1
+    assert ds[0]["y"].shape[1] == len(TARGET_ORDER) + 1
     ds4 = SU2Dataset(paths, compute_norm_stats(paths))
-    assert ds4[0]["y"].shape[1] == TARGET_DIM
+    assert ds4[0]["y"].shape[1] == len(TARGET_ORDER)
 
 
 def test_denormalize_round_trips_with_p(tmp_path):
@@ -180,8 +177,8 @@ def test_stats_load_defaults_targets_for_old_checkpoints(tmp_path):
     """A stats file with no target list must fall back to the four-channel layout."""
     out = tmp_path / "old_stats.pt"
     torch.save({
-        "x_mean": torch.zeros(INPUT_DIM), "x_std": torch.ones(INPUT_DIM),
-        "y_mean": torch.zeros(TARGET_DIM), "y_std": torch.ones(TARGET_DIM),
+        "x_mean": torch.zeros(POS_DIM + N_CASE_PARAMS), "x_std": torch.ones(POS_DIM + N_CASE_PARAMS),
+        "y_mean": torch.zeros(len(TARGET_ORDER)), "y_std": torch.ones(len(TARGET_ORDER)),
         "log_targets": ["rho", "T"],
     }, str(out))
     assert SU2NormStats.load(out).targets == TARGET_ORDER
@@ -194,8 +191,8 @@ def test_stats_load_defaults_targets_for_old_checkpoints(tmp_path):
 def test_compute_norm_stats_unit_variance_target(tmp_path):
     paths = [_synth_case(tmp_path, f"case_{i:04d}", n=400, seed=i) for i in range(4)]
     stats = compute_norm_stats(paths)
-    assert stats.x_mean.shape == (INPUT_DIM,)
-    assert stats.x_std.shape == (INPUT_DIM,)
+    assert stats.x_mean.shape == ((POS_DIM + N_CASE_PARAMS),)
+    assert stats.x_std.shape == ((POS_DIM + N_CASE_PARAMS),)
     # pool the training points and confirm the normalization lands at mean 0
     # and standard deviation 1
     feats = np.concatenate(
@@ -236,11 +233,11 @@ def test_su2_dataset_returns_normalized_tensors(tmp_path):
     stats = compute_norm_stats(paths)
     ds = SU2Dataset(paths, stats, subsample=64)
     item = ds[0]
-    assert item["x"].shape == (64, INPUT_DIM)
-    assert item["y"].shape == (64, TARGET_DIM)
+    assert item["x"].shape == (64, (POS_DIM + N_CASE_PARAMS))
+    assert item["y"].shape == (64, len(TARGET_ORDER))
     assert item["pos"].shape == (64, 2)
     # the targets in physical units are recoverable
-    assert item["y_raw"].shape == (64, TARGET_DIM)
+    assert item["y_raw"].shape == (64, len(TARGET_ORDER))
     assert item["case_params"].shape == (N_CASE_PARAMS,)
     assert item["name"] == "case_0000"
 
@@ -284,7 +281,7 @@ def test_reconstruct_pressure_matches_ideal_gas():
     rho = torch.tensor([0.01, 0.05, 0.1])
     T = torch.tensor([300.0, 2000.0, 5000.0])
     p = reconstruct_pressure(rho, T)
-    expected = rho * R_SPECIFIC_AIR * T
+    expected = rho * R_AIR * T
     assert torch.allclose(p, expected)
 
 

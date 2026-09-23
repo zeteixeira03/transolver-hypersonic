@@ -47,24 +47,13 @@ from __future__ import annotations
 import argparse
 import json
 import random
-import sqlite3
-import sys
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
+from src.cfd.ledger import read_cases
 from src.data.su2 import TARGET_ORDER
-
-
-# the channels every cell shares. the free-pressure cell predicts a fifth one,
-# and a mean over five channels does not compare against a mean over four. the
-# tier metric therefore always uses these four, and pressure is reported alone.
-COMMON_CHANNELS = TARGET_ORDER
 
 CELL_ORDER = ("base", "free_p", "plain_norm", "qw_direct", "qw_resid")
 CELL_LABELS = {
@@ -74,11 +63,6 @@ CELL_LABELS = {
     "qw_direct": "q_w head, direct",
     "qw_resid": "q_w head, Fay-Riddell residual",
 }
-TIER_LABELS = {
-    "test_interp": "interpolation",
-    "test": "family holdout",
-}
-OOD_PREFIX = "ood_"
 
 
 # ============================================================================================
@@ -118,17 +102,11 @@ def build_splits(
               for name in ("val", "test", "test_interp")}
     held = {n for names in splits.values() for n in names}
 
-    con = sqlite3.connect(f"file:{ledger.as_posix()}?mode=ro&immutable=1", uri=True)
-    rows = con.execute(
-        "select case_id, geom_id from cases where status='done' and group_name='core'"
-    ).fetchall()
-    con.close()
-
     by_geom: dict[int, list[str]] = defaultdict(list)
-    for case_id, geom_id in rows:
-        name = f"case_{int(case_id):04d}"
-        if name not in held:
-            by_geom[int(geom_id)].append(name)
+    for case_id, r in read_cases(ledger).items():
+        name = f"case_{case_id:04d}"
+        if r["status"] == "done" and r["group_name"] == "core" and name not in held:
+            by_geom[int(r["geom_id"])].append(name)
 
     pool_size = sum(len(v) for v in by_geom.values())
     if pool_size < n_train:
@@ -199,13 +177,13 @@ def summarize_run(run_dir: Path) -> dict:
     final = json.loads((run_dir / "final_eval.json").read_text())
 
     ood = [r for name, recs in per_case.items()
-           if name.startswith(OOD_PREFIX) for r in recs]
+           if name.startswith("ood_") for r in recs]
     in_dist = per_case.get("test_interp", []) + per_case.get("test", [])
     out = {
         "n_train": final["splits"]["train"],
-        "interp": tier_mean_rl2(per_case["test_interp"], COMMON_CHANNELS),
-        "family": tier_mean_rl2(per_case["test"], COMMON_CHANNELS),
-        "ood": tier_mean_rl2(ood, COMMON_CHANNELS),
+        "interp": tier_mean_rl2(per_case["test_interp"], TARGET_ORDER),
+        "family": tier_mean_rl2(per_case["test"], TARGET_ORDER),
+        "ood": tier_mean_rl2(ood, TARGET_ORDER),
         "qw_posthoc": qw_abs_rel_median(in_dist, "qw_pred", "qw_true"),
         "qw_head": qw_abs_rel_median(in_dist, "qw_head_pred", "qw_ledger"),
     }

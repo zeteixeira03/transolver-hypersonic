@@ -28,18 +28,14 @@ import json
 import shutil
 import sys
 import time
-from typing import Any
 from dataclasses import asdict
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
 # put the project root on the import path, so "from src..." resolves when this
 # file runs as a script
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
 from src.cfd.postprocess import (
     extract_axis_line,
     extract_surface,
@@ -47,51 +43,21 @@ from src.cfd.postprocess import (
     find_shock_standoff,
     stagnation_values,
 )
-from src.cfd.runner import Case, run_case
+from src.cfd.runner import CANONICAL_CASE, Case, detect_invocation, run_case
 from src.eval.sanity import compare_to_analytical, format_summary
-
+from src.geometry.sphere_cone import mesh_settings
 
 # ============================================================================================
 #                                       canonical case
 # ============================================================================================
 
-CANONICAL = Case(
-    R_n=0.0254,
-    theta_c_deg=60.0,
-    R_b=0.0762,
-    R_s=0.00762,
-    mach=10.0,
-    T_inf=220.0,
-    p_inf=100.0,
-    T_w=300.0,
-)
-
-DEFAULT_MESH_KWARGS = dict(
-    L_far=8.0 * 0.0762,
-    h_wall=0.0254 / 120.0,
-    h_far=8.0 * 0.0762 / 25.0,
-    bl_first_height=0.0254 / 30000.0,
-    bl_thickness=0.06 * 0.0254,
-    bl_ratio=1.15,
-    refine_shock_box=True,
-)
+CANONICAL = CANONICAL_CASE
+DEFAULT_MESH_KWARGS = mesh_settings(CANONICAL.R_n, CANONICAL.R_b)
 
 
 # ============================================================================================
 #                                       helpers
 # ============================================================================================
-
-def detect_invocation() -> tuple[str | None, str | None]:
-    """Return the distribution and conda environment to run SU2 in, for this host.
-
-    A SU2_CFD on the executable search path, as inside an already active conda
-    environment, returns ``(None, None)`` and the caller invokes it directly.
-    Anything else returns the Windows Subsystem for Linux setup.
-    """
-    if shutil.which("SU2_CFD"):
-        return None, None
-    return "Ubuntu-22.04", "su2"
-
 
 def make_acceptance_figure(
     case: Case,
@@ -153,7 +119,7 @@ def make_acceptance_figure(
     ax.axvline(-summary["ref_standoff"] * 1e3, color="C3", ls=":", lw=1.5,
                label=f"Billig delta = {summary['ref_standoff']*1e3:.3f} mm")
     ax.axhline(summary["ref_p02"], color="C3", ls="--", lw=0.8, alpha=0.5,
-               label=f"Rayleigh-Pitot p02")
+               label="Rayleigh-Pitot p02")
     ax.set_xlabel("axis x [mm]")
     ax.set_ylabel("pressure [Pa]")
     ax.set_yscale("log")
@@ -250,7 +216,7 @@ def main():
         restart_dat = run_dir / "restart_flow.dat"
         solution_dat = run_dir / "solution_flow.dat"
         if not restart_dat.exists():
-            print(f"[validate] pass 1 produced no restart_flow.dat; aborting")
+            print("[validate] pass 1 produced no restart_flow.dat; aborting")
             sys.exit(2)
         shutil.copyfile(restart_dat, solution_dat)
 

@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import matplotlib
@@ -40,20 +39,11 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
 from src.analytical import knudsen_number
-from src.data.su2 import CASE_PARAM_ORDER, TARGET_ORDER
-
-
-KN_MAX = 0.01                                 # continuum floor, as in src.data.sampler
-TIER_LABELS = {
-    "test_interp": "interpolation",
-    "test": "family holdout",
-}
-
+from src.data.sampler import KN_MAX
+from src.data.su2 import TARGET_ORDER
+from src.eval.metrics import channel_mean, tier_label
+from src.eval.uncertainty import envelope_distance
 
 # ============================================================================================
 #                                       loading
@@ -71,10 +61,6 @@ def load_run(run_dir: Path) -> dict:
     }
 
 
-def mean_rl2(split_metrics: dict) -> float:
-    return float(np.mean([split_metrics[f"rL2_{c}"] for c in TARGET_ORDER]))
-
-
 def ood_splits(run: dict) -> list[str]:
     return [s for s in run["final"] if s.startswith("ood_")]
 
@@ -89,22 +75,6 @@ def pooled_ood_mean(run: dict) -> float:
 # ============================================================================================
 #                                       envelope distance
 # ============================================================================================
-
-def envelope_distance(params: dict[str, float], envelope: dict[str, list[float]]) -> float:
-    """How far one case falls outside the training envelope.
-
-    Each parameter is measured in units of its own box width, and the result is
-    the largest of those. A case inside the box returns 0.
-    """
-    d = 0.0
-    for k in CASE_PARAM_ORDER:
-        lo, hi = envelope[k]
-        width = hi - lo
-        if width <= 0:
-            continue                          # a parameter held constant, such as T_w
-        d = max(d, (params[k] - hi) / width, (lo - params[k]) / width)
-    return max(d, 0.0)
-
 
 def per_case_table(run: dict) -> list[dict]:
     """Flatten the per-case records of every evaluation split into one list.
@@ -143,7 +113,7 @@ def ablation_table(runs: list[dict]) -> str:
     for r in runs:
         row = {"M": r["slice_num"]}
         for c in cols:
-            row[c] = mean_rl2(r["final"][c]) if c in r["final"] else None
+            row[c] = channel_mean(r["final"][c], "rL2_") if c in r["final"] else None
         row["ood_pooled"] = pooled_ood_mean(r)
         rows.append(row)
 
@@ -176,12 +146,12 @@ def tier_table(run: dict) -> str:
         if s not in run["final"]:
             continue
         m = run["final"][s]
-        label = TIER_LABELS.get(s, s.removeprefix("ood_") + " (extrapolation)")
+        label = tier_label(s)
         qw = m.get("qw_abs_rel_err_median")
         lines.append(
             f"| {label} | "
             + " | ".join(f"{m[f'rL2_{c}']:.3f}" for c in TARGET_ORDER)
-            + f" | {mean_rl2(m):.3f} | {len(run['per_case'][s])} | "
+            + f" | {channel_mean(m, 'rL2_'):.3f} | {len(run['per_case'][s])} | "
             + (f"{qw:+.0%} |".replace("+", "") if qw is not None else "- |")
         )
     return "\n".join(lines)
@@ -227,7 +197,7 @@ def envelope_figure(run: dict, fig_out: Path, guard_factor: float = 2.0) -> floa
     groups = sorted({r["split"] for r in rows})
     for g in groups:
         pts = [r for r in rows if r["split"] == g]
-        label = TIER_LABELS.get(g, g.removeprefix("ood_") + " (extrapolation)")
+        label = tier_label(g)
         ax.scatter([r["dist"] for r in pts], [r["mean_rL2"] for r in pts],
                    s=18, alpha=0.7, label=label)
     ax.plot(trend_x, trend_y, "k--", lw=1, label="binned median")
@@ -268,7 +238,7 @@ def main() -> None:
     if args.envelope_m is not None:
         chosen = next(r for r in runs if r["slice_num"] == args.envelope_m)
     else:
-        chosen = min(runs, key=lambda r: mean_rl2(r["final"]["test"]))
+        chosen = min(runs, key=lambda r: channel_mean(r["final"]["test"], "rL2_"))
     print(f"\n## Tier table (M = {chosen['slice_num']})\n")
     print(tier_table(chosen))
 

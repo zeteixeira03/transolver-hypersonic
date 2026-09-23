@@ -27,8 +27,10 @@ tangent point, so no numerical root find is needed:
 from __future__ import annotations
 
 import math
+import tempfile
 from pathlib import Path
 
+import numpy as np
 
 # ============================================================================================
 #                                   analytical key points
@@ -293,3 +295,50 @@ def mesh_sphere_cone(
         gmsh.finalize()
 
     return pts
+
+
+# ============================================================================================
+#                                   dataset mesh recipe
+# ============================================================================================
+
+def mesh_settings(R_n: float, R_b: float) -> dict:
+    """Mesh settings of the dataset, scaled with the geometry.
+
+    The boundary layer holds the wall heat flux inside its tolerance: a growth
+    ratio of 1.15, a first cell at R_n/30000 and a thickness of 0.06 R_n. A
+    ratio of 1.2 with a first cell at R_n/15000 misses Fay-Riddell by 127% and
+    puts the standoff 27% low. The first cell never drops below 5e-7 m, which
+    binds below R_n = 15 mm; a finer cell reads the heat flux 22 to 26% high on
+    a 12 mm nose.
+
+    A model trained on these meshes must also predict on them. Slice attention
+    couples every node to every other, so a different node cloud shifts the
+    prediction.
+    """
+    return dict(
+        L_far=8.0 * R_b,
+        h_wall=R_n / 120.0,
+        h_far=8.0 * R_b / 25.0,
+        bl_first_height=max(R_n / 30000.0, 5e-7),
+        bl_thickness=0.06 * R_n,
+        bl_ratio=1.15,
+        refine_shock_box=True,
+    )
+
+
+def read_su2_nodes(path: str | Path) -> np.ndarray:
+    """Read the (x, r) node coordinates from the ``NPOIN`` block of an ASCII .su2 mesh."""
+    lines = Path(path).read_text().splitlines()
+    for i, line in enumerate(lines):
+        if line.strip().startswith("NPOIN="):
+            n = int(line.split("=")[1].split()[0])
+            return np.array([[float(v) for v in lines[i + 1 + j].split()[:2]] for j in range(n)])
+    raise ValueError(f"no NPOIN block in {path}")
+
+
+def mesh_nodes(R_n: float, theta_c_deg: float, R_b: float, R_s: float) -> np.ndarray:
+    """Mesh one geometry with the dataset recipe and return its (N, 2) node coordinates."""
+    with tempfile.TemporaryDirectory() as td:
+        out = Path(td) / "case.su2"
+        mesh_sphere_cone(R_n, theta_c_deg, R_b, R_s, out, **mesh_settings(R_n, R_b))
+        return read_su2_nodes(out)

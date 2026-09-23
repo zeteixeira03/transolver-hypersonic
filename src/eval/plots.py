@@ -18,6 +18,7 @@ import numpy as np
 import torch
 
 from src.data.airfrans import AirfRANSDataset, NormStats, denormalize_targets
+from src.eval.metrics import relative_l2
 
 
 # ============================================================================================
@@ -71,12 +72,7 @@ def plot_acceptance(
     Returns the figure and the relative L2 values that its panel titles carry.
     """
     model.eval()
-    saved_subsample = dataset.subsample
-    dataset.subsample = None
-    try:
-        item = dataset[sim_index]
-    finally:
-        dataset.subsample = saved_subsample
+    item = dataset[sim_index]
 
     x = item["x"].unsqueeze(0).to(device)
     pos = item["pos"].unsqueeze(0).to(device)
@@ -87,23 +83,10 @@ def plot_acceptance(
 
     pred = denormalize_targets(model(x, pos=pos).squeeze(0), stats.to(device))
 
-    # relative L2 per channel, for the panel titles
-    num = (pred - y_true).pow(2).sum(dim=0).sqrt()
-    den = y_true.pow(2).sum(dim=0).sqrt().clamp_min(1e-12)
-    rl2_full = (num / den).cpu().numpy()
-
-    # on the surface only pressure gets a relative L2. the no-slip condition
-    # holds both velocity components near zero there, and the turbulent
-    # viscosity is near zero at the wall, so a relative error on those three
-    # divides by nothing
-    if surface.any():
-        p_pred_s = pred[surface, 2]
-        p_true_s = y_true[surface, 2]
-        num_s = (p_pred_s - p_true_s).pow(2).sum().sqrt()
-        den_s = p_true_s.pow(2).sum().sqrt().clamp_min(1e-12)
-        rl2_surf_p = float(num_s / den_s)
-    else:
-        rl2_surf_p = float("nan")
+    rl2_full = relative_l2(pred, y_true).cpu().numpy()
+    # only pressure gets a surface score; see evaluate_airfrans
+    rl2_surf_p = (float(relative_l2(pred[surface, 2:3], y_true[surface, 2:3])[0])
+                  if surface.any() else float("nan"))
 
     # panel 1: the surface pressure coefficient against x. the sign of the y
     # component of the surface normal splits upper from lower, so each side

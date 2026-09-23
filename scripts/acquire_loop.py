@@ -36,36 +36,22 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 from scipy.stats import qmc
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-sys.path.insert(0, str(ROOT / "app"))
-
-from inference import (  # noqa: E402  -- app/ helpers, path-injected above
+from src.analytical import knudsen_number
+from src.data.sampler import FS_BOX, GEOM_BOX, KN_MAX, case_params
+from src.eval.uncertainty import (
     Ensemble,
-    _channel_spread,
-    _ensemble_forward,
     envelope_distance,
-    mesh_nodes,
+    load_ensemble,
+    predict_on_nodes,
+    spread,
 )
-from src.analytical import knudsen_number  # noqa: E402
-from src.data.sampler import GEOM_BOX, FS_BOX, KN_MAX  # noqa: E402
-from src.data.sampler import us_standard_atmosphere  # noqa: E402
-from src.data.su2 import (  # noqa: E402
-    CASE_PARAM_ORDER, N_CASE_PARAMS, POS_DIM, TARGET_ORDER,
-    SU2NormStats,
-)
-from src.models.transolver import Transolver  # noqa: E402
-
-
-T_WALL = 300.0  # K, isothermal cold wall, fixed across the dataset
+from src.geometry.sphere_cone import mesh_nodes
 
 # the six free design axes. four are geometric: nose radius, cone angle, and the
 # ratios R_b/R_n and R_s/R_b. two are flight conditions: Mach number and
@@ -73,43 +59,6 @@ T_WALL = 300.0  # K, isothermal cold wall, fixed across the dataset
 # temperature is fixed. all six vary here, so the scan reaches the ratio
 # directions of the box and not only the line at R_b = 3 R_n, R_s = 0.1 R_b.
 SCAN_AXES = ("R_n", "theta_c", "R_b_ratio", "R_s_ratio", "mach", "altitude")
-
-
-def build_params(scan: dict[str, float]) -> dict[str, float]:
-    """Expand the six scan axes into the full eight-parameter case vector."""
-    T_inf, p_inf, _rho = us_standard_atmosphere(scan["altitude"])
-    R_b = scan["R_b_ratio"] * scan["R_n"]
-    R_s = scan["R_s_ratio"] * R_b
-    return {
-        "R_n": scan["R_n"], "theta_c_deg": scan["theta_c"], "R_b": R_b, "R_s": R_s,
-        "mach": scan["mach"], "T_inf": T_inf, "p_inf": p_inf, "T_w": T_WALL,
-    }
-
-
-def load_ensemble_from(ensemble_dir: Path, member_glob: str, device: str) -> Ensemble:
-    """Build an Ensemble from any directory that holds member run directories.
-
-    ``app.inference.load_ensemble`` builds the same object from a fixed constant.
-    This version takes the directories as arguments, so one scoring path serves
-    every ensemble version.
-    """
-    dirs = sorted(ensemble_dir.glob(member_glob))
-    if not dirs:
-        raise SystemExit(f"no member dirs matching {member_glob} under {ensemble_dir}")
-    models = []
-    for run_dir in dirs:
-        rec = json.loads((run_dir / "final_eval.json").read_text())["args"]
-        model = Transolver(
-            space_dim=POS_DIM, fun_dim=N_CASE_PARAMS, out_dim=len(TARGET_ORDER),
-            n_hidden=rec["n_hidden"], n_layers=rec["n_layers"],
-            n_head=rec["n_head"], slice_num=rec["slice_num"],
-        )
-        model.load_state_dict(torch.load(run_dir / "best.pt", map_location=device))
-        models.append(model.to(device).eval())
-    stats = SU2NormStats.load(dirs[0] / "norm_stats.pt").to(device)
-    envelope = json.loads((dirs[0] / "final_eval.json").read_text())["train_envelope"]
-    print(f"[ensemble] {len(models)} members from {ensemble_dir}/{member_glob}")
-    return Ensemble(models=models, stats=stats, envelope=envelope)
 
 
 def candidate_pool(n: int, seed: int) -> list[dict[str, float]]:
@@ -131,14 +80,14 @@ def score_candidate(ens: Ensemble, cand: dict[str, float], device: str) -> dict:
     The scores are the ensemble spread, the distance outside the envelope, and
     the Knudsen number.
     """
-    params = build_params(cand)
-    coords = mesh_nodes(params)
-    members = _ensemble_forward(ens, coords, params, device)
-    spread = _channel_spread(members)
+    params = case_params(**cand)
+    coords = mesh_nodes(params["R_n"], params["theta_c_deg"], params["R_b"], params["R_s"])
+    members = predict_on_nodes(ens, coords, params, device)
+    mean_spread = float(spread(members, members.mean(dim=0)).mean())
     dist = envelope_distance(params, ens.envelope)
     kn = knudsen_number(params["mach"], params["T_inf"], params["p_inf"], params["R_n"])
     return {
-        "scan": cand, "params": params, "spread": spread,
+        "scan": cand, "params": params, "spread": mean_spread,
         "dist": dist, "kn": kn, "n_nodes": int(coords.shape[0]),
     }
 
@@ -196,7 +145,7 @@ def main() -> None:
     out.mkdir(parents=True, exist_ok=True)
     ledger = out / "scored.jsonl"
 
-    ens = load_ensemble_from(Path(args.ensemble_dir), args.member_glob, args.device)
+    ens = load_ensemble(list(Path(args.ensemble_dir).glob(args.member_glob)), args.device)
     pool = candidate_pool(args.n_candidates, args.seed)
 
     # resume: skip candidates already in the ledger (keyed by rounded scan tuple)

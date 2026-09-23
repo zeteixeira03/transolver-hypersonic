@@ -24,18 +24,11 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
+import multiprocessing as mp
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-import multiprocessing as mp
-
-from src.cfd import ledger as L
 from scripts.generate_dataset import _build_parser, run_generation
-
+from src.cfd import ledger as L
 
 LOOP_GROUP = "loop"
 

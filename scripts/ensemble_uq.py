@@ -20,7 +20,7 @@ a single member, the calibration of spread against error as a Spearman rank
 correlation per tier and a figure of binned medians, and the decision table.
 
 The decision rule refuses an input when the envelope guard fails, meaning a
-distance past ``--guard-dist`` or a Knudsen number above 0.01, and also when the
+distance past 0.07 of the box width or a Knudsen number above 0.01, and also when the
 spread passes the refuse threshold. It warns when the spread passes the warn
 threshold, and trusts otherwise. The default thresholds come from the spread
 distribution on the validation split, at its 90th percentile and four times
@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import matplotlib
@@ -53,50 +52,33 @@ import numpy as np
 import torch
 from scipy.stats import spearmanr
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from scripts.train import (
-    OOD_GROUPS,
-    load_case_geom_ids,
-    load_case_groups,
-    split_paths,
-)
-from scripts.slice_ablation import KN_MAX, TIER_LABELS, envelope_distance
 from src.analytical import knudsen_number
+from src.cfd.ledger import read_cases
+from src.data.sampler import KN_MAX
 from src.data.su2 import (
     CASE_PARAM_ORDER,
-    N_CASE_PARAMS,
-    POS_DIM,
+    TARGET_ORDER,
     SU2Dataset,
     SU2NormStats,
-    TARGET_DIM,
-    TARGET_ORDER,
-    denormalize_targets,
     list_case_npzs,
+    pin_splits,
+    split_paths,
 )
-from src.models.transolver import Transolver
-
-
-EVAL_SPLITS = ("val", "test", "test_interp", *(f"ood_{g}" for g in OOD_GROUPS))
-
+from src.eval.metrics import EVAL_SPLITS, channel_mean, relative_l2, tier_label, tiers_present
+from src.eval.uncertainty import (
+    GUARD_DIST,
+    Ensemble,
+    calibrate_thresholds,
+    decide,
+    envelope_distance,
+    load_member,
+    member_predictions,
+    spread,
+)
 
 # ============================================================================================
 #                                       inference
 # ============================================================================================
-
-def load_member(run_dir: Path, device: str) -> Transolver:
-    """Build one member from its recorded arguments and load ``best.pt``."""
-    rec = json.loads((run_dir / "final_eval.json").read_text())["args"]
-    model = Transolver(
-        space_dim=POS_DIM, fun_dim=N_CASE_PARAMS, out_dim=TARGET_DIM,
-        n_hidden=rec["n_hidden"], n_layers=rec["n_layers"],
-        n_head=rec["n_head"], slice_num=rec["slice_num"],
-    )
-    model.load_state_dict(torch.load(run_dir / "best.pt", map_location=device))
-    return model.to(device).eval()
-
 
 @torch.no_grad()
 def run_inference(run_dirs: list[Path], workdir: Path, device: str,
@@ -107,31 +89,24 @@ def run_inference(run_dirs: list[Path], workdir: Path, device: str,
     """
     finals = [json.loads((d / "final_eval.json").read_text()) for d in run_dirs]
     args0 = finals[0]["args"]
-    for f, d in zip(finals[1:], run_dirs[1:]):
+    for f, d in zip(finals[1:], run_dirs[1:], strict=True):
         for k in ("slice_num", "seed", "val_frac", "test_frac", "interp_frac"):
             if f["args"][k] != args0[k]:
                 raise SystemExit(f"{d}: {k}={f['args'][k]} differs from member 0 "
                                  f"({args0[k]}); not a valid ensemble")
-    envelope = finals[0]["train_envelope"]
     stats = SU2NormStats.load(run_dirs[0] / "norm_stats.pt")
-    stats_dev = stats.to(device)
-    models = [load_member(d, device) for d in run_dirs]
-    print(f"[infer] {len(models)} members, slice_num={args0['slice_num']}, "
-          f"device={device}")
+    ens = Ensemble(models=[load_member(d, device) for d in run_dirs], stats=stats.to(device),
+                   envelope=finals[0]["train_envelope"])
+    print(f"[infer] {len(ens.models)} members, slice_num={args0['slice_num']}, device={device}")
 
-    ledger = workdir / "ledger.db"
     paths = list_case_npzs(workdir)
-    splits = split_paths(paths, load_case_groups(ledger), load_case_geom_ids(ledger),
+    rows = read_cases(workdir / "ledger.db")
+    splits = split_paths(paths, {c: r["group_name"] for c, r in rows.items()},
+                         {c: int(r["geom_id"]) for c, r in rows.items()},
                          args0["val_frac"], args0["test_frac"], args0["seed"],
                          args0["interp_frac"])
     if pinned_splits is not None:
-        pinned = json.loads(Path(pinned_splits).read_text())
-        def _cn(p: Path) -> str:
-            return p.parent.name if p.name == "case.npz" else p.stem
-        by_name = {_cn(p): p for p in paths}
-        for split_name, names in pinned.items():
-            splits[split_name] = [by_name[n] for n in names if n in by_name]
-        print(f"[infer] applied {len(pinned)} pinned split(s) from {pinned_splits}")
+        splits = pin_splits(splits, paths, json.loads(Path(pinned_splits).read_text()))
 
     recs: list[dict] = []
     for split in EVAL_SPLITS:
@@ -140,16 +115,12 @@ def run_inference(run_dirs: list[Path], workdir: Path, device: str,
         ds = SU2Dataset(splits[split], stats, subsample=None)
         for i in range(len(ds)):
             item = ds[i]
-            x = item["x"].unsqueeze(0).to(device)
-            pos = item["pos"].unsqueeze(0).to(device)
             y = item["y_raw"].to(device)
-            preds = torch.stack([
-                denormalize_targets(m(x, pos=pos).squeeze(0), stats_dev) for m in models
-            ])                                                     # (K, N, C)
-            den = y.pow(2).sum(dim=0).sqrt().clamp_min(1e-12)      # (C,)
-            rl2_members = (preds - y).pow(2).sum(dim=1).sqrt() / den
-            rl2_ens = (preds.mean(dim=0) - y).pow(2).sum(dim=0).sqrt() / den
-            spread = preds.std(dim=0).pow(2).sum(dim=0).sqrt() / den
+            preds = member_predictions(ens, item["x"].unsqueeze(0).to(device),
+                                       item["pos"].unsqueeze(0).to(device))   # (K, N, C)
+            rl2_members = torch.stack([relative_l2(p, y) for p in preds])
+            rl2_ens = relative_l2(preds.mean(dim=0), y)
+            spread_c = spread(preds, y)
             params = {k: float(item["case_params"][j])
                       for j, k in enumerate(CASE_PARAM_ORDER)}
             recs.append({
@@ -157,39 +128,17 @@ def run_inference(run_dirs: list[Path], workdir: Path, device: str,
                 "split": split,
                 "case_params": params,
                 "rL2_ens": {c: float(rl2_ens[j]) for j, c in enumerate(TARGET_ORDER)},
-                "spread": {c: float(spread[j]) for j, c in enumerate(TARGET_ORDER)},
+                "spread": {c: float(spread_c[j]) for j, c in enumerate(TARGET_ORDER)},
                 "rL2_members": [
                     {c: float(rl2_members[k, j]) for j, c in enumerate(TARGET_ORDER)}
-                    for k in range(len(models))
+                    for k in range(len(ens.models))
                 ],
-                "dist": envelope_distance(params, envelope),
+                "dist": envelope_distance(params, ens.envelope),
                 "kn": knudsen_number(params["mach"], params["T_inf"],
                                      params["p_inf"], params["R_n"]),
             })
         print(f"[infer] {split}: {len(splits[split])} cases")
     return recs
-
-
-# ============================================================================================
-#                                       analysis helpers
-# ============================================================================================
-
-def chan_mean(d: dict[str, float]) -> float:
-    return float(np.mean([d[c] for c in TARGET_ORDER]))
-
-
-def tiers_present(recs: list[dict]) -> list[str]:
-    """Evaluation tiers in report order. The validation split is left out.
-
-    That split only calibrates the thresholds and is not a tier.
-    """
-    order = [s for s in EVAL_SPLITS if s != "val"]
-    present = {r["split"] for r in recs}
-    return [s for s in order if s in present]
-
-
-def tier_label(split: str) -> str:
-    return TIER_LABELS.get(split, split.removeprefix("ood_") + " (extrapolation)")
 
 
 # ============================================================================================
@@ -203,13 +152,13 @@ def ensemble_table(recs: list[dict]) -> str:
              "|" + "---|" * 6]
     for split in tiers_present(recs):
         rows = [r for r in recs if r["split"] == split]
-        ens = np.mean([chan_mean(r["rL2_ens"]) for r in rows])
-        per_member = [np.mean([chan_mean(r["rL2_members"][k]) for r in rows])
+        ens = np.mean([channel_mean(r["rL2_ens"]) for r in rows])
+        per_member = [np.mean([channel_mean(r["rL2_members"][k]) for r in rows])
                       for k in range(n_members)]
-        spread = np.mean([chan_mean(r["spread"]) for r in rows])
+        mean_spread = np.mean([channel_mean(r["spread"]) for r in rows])
         lines.append(f"| {tier_label(split)} | {len(rows)} | {ens:.3f} "
                      f"| {np.mean(per_member):.3f} | {min(per_member):.3f} "
-                     f"| {spread:.3f} |")
+                     f"| {mean_spread:.3f} |")
     return "\n".join(lines)
 
 
@@ -222,8 +171,8 @@ def calibration_stats(recs: list[dict]) -> str:
     pooled_s, pooled_e = [], []
     for split in tiers_present(recs):
         rows = [r for r in recs if r["split"] == split]
-        s = [chan_mean(r["spread"]) for r in rows]
-        e = [chan_mean(r["rL2_ens"]) for r in rows]
+        s = [channel_mean(r["spread"]) for r in rows]
+        e = [channel_mean(r["rL2_ens"]) for r in rows]
         pooled_s += s
         pooled_e += e
         rho = spearmanr(s, e).statistic if len(rows) >= 3 else float("nan")
@@ -233,28 +182,18 @@ def calibration_stats(recs: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def decision_table(recs: list[dict], warn: float, refuse: float,
-                   guard_dist: float) -> str:
+def decision_table(recs: list[dict], thresholds: dict[str, float]) -> str:
     """Render the measured error inside each decision bucket, as Markdown.
 
     The validation split is excluded, so the rows cover the tiers alone.
     """
 
-    def decide(r: dict) -> str:
-        if r["kn"] > KN_MAX or r["dist"] > guard_dist:
-            return "refuse"
-        s = chan_mean(r["spread"])
-        if s >= refuse:
-            return "refuse"
-        if s >= warn:
-            return "warn"
-        return "trust"
-
     rows = [r for r in recs if r["split"] != "val"]
     lines = ["| decision | n | median err | p90 err | max err |",
              "|" + "---|" * 5]
     for bucket in ("trust", "warn", "refuse"):
-        errs = [chan_mean(r["rL2_ens"]) for r in rows if decide(r) == bucket]
+        errs = [channel_mean(r["rL2_ens"]) for r in rows
+                if decide(r["dist"], r["kn"], channel_mean(r["spread"]), thresholds) == bucket]
         if not errs:
             lines.append(f"| {bucket} | 0 | - | - | - |")
             continue
@@ -276,13 +215,13 @@ def calibration_figure(recs: list[dict], fig_out: Path,
     fig, ax = plt.subplots(figsize=(7, 4.5))
     for split in tiers_present(recs):
         rows = [r for r in recs if r["split"] == split]
-        ax.scatter([chan_mean(r["spread"]) for r in rows],
-                   [chan_mean(r["rL2_ens"]) for r in rows],
+        ax.scatter([channel_mean(r["spread"]) for r in rows],
+                   [channel_mean(r["rL2_ens"]) for r in rows],
                    s=18, alpha=0.7, label=tier_label(split))
 
     rows = [r for r in recs if r["split"] != "val"]
-    s = np.array([chan_mean(r["spread"]) for r in rows])
-    e = np.array([chan_mean(r["rL2_ens"]) for r in rows])
+    s = np.array([channel_mean(r["spread"]) for r in rows])
+    e = np.array([channel_mean(r["rL2_ens"]) for r in rows])
     edges = np.quantile(s, np.linspace(0, 1, 7))
     mids, meds = [], []
     for lo, hi in zip(edges[:-1], edges[1:]):
@@ -321,8 +260,6 @@ def main() -> None:
     p.add_argument("--out", default="data/processed/ensemble")
     p.add_argument("--per-case", default=None, metavar="JSON",
                    help="skip inference; analyze an existing ensemble_per_case.json")
-    p.add_argument("--guard-dist", type=float, default=0.07,
-                   help="envelope guard threshold on box exceedance")
     p.add_argument("--warn-spread", type=float, default=None,
                    help="spread above which the decision is warn; the default is "
                         "the 90th percentile on the validation split")
@@ -350,22 +287,25 @@ def main() -> None:
         (out / "ensemble_per_case.json").write_text(json.dumps(recs, indent=2))
         print(f"[infer] wrote {out / 'ensemble_per_case.json'}")
 
-    val_spread = [chan_mean(r["spread"]) for r in recs if r["split"] == "val"]
-    warn = args.warn_spread
-    if warn is None:
-        warn = float(np.quantile(val_spread, 0.9)) if val_spread else 0.05
-    refuse = args.refuse_spread if args.refuse_spread is not None else 4.0 * warn
-    print(f"\nthresholds: warn spread {warn:.4f}, refuse spread {refuse:.4f}, "
-          f"guard d > {args.guard_dist}, Kn > {KN_MAX}")
+    thresholds = calibrate_thresholds(
+        [channel_mean(r["spread"]) for r in recs if r["split"] == "val"])
+    if args.warn_spread is not None:
+        thresholds = {"warn": args.warn_spread, "refuse": 4.0 * args.warn_spread}
+    if args.refuse_spread is not None:
+        thresholds["refuse"] = args.refuse_spread
+    print(f"\nthresholds: warn spread {thresholds['warn']:.4f}, "
+          f"refuse spread {thresholds['refuse']:.4f}, guard d > {GUARD_DIST}, Kn > {KN_MAX}")
+    out = Path(args.per_case).parent if args.per_case else Path(args.out)
+    (out / "thresholds.json").write_text(json.dumps(thresholds, indent=2))
 
     print("\n## Ensemble against single members (mean relative L2 per tier)\n")
     print(ensemble_table(recs))
     print("\n## Spread-error calibration (Spearman rank corr per tier)\n")
     print(calibration_stats(recs))
     print("\n## Trust/warn/refuse (eval tiers, actual error per bucket)\n")
-    print(decision_table(recs, warn, refuse, args.guard_dist))
+    print(decision_table(recs, thresholds))
 
-    calibration_figure(recs, Path(args.fig_out), warn, refuse)
+    calibration_figure(recs, Path(args.fig_out), thresholds["warn"], thresholds["refuse"])
     print(f"\ncalibration figure -> {args.fig_out}")
 
 

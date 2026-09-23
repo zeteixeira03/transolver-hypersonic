@@ -54,10 +54,6 @@ from pathlib import Path
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
 from src.cfd import ledger as L
 from src.cfd.postprocess import (
     extract_axis_line,
@@ -66,9 +62,10 @@ from src.cfd.postprocess import (
     find_shock_standoff,
     stagnation_values,
 )
-from src.cfd.runner import Case, run_case
+from src.cfd.runner import Case, detect_invocation, run_case
 from src.data.sampler import sample_cases
 from src.eval.sanity import compare_to_analytical, format_summary
+from src.geometry.sphere_cone import mesh_settings
 
 
 # the validation sample: 5 cases that reach the corners of the sweep design box.
@@ -103,61 +100,12 @@ def _build_stage2_sample() -> list[tuple[str, Case]]:
     ]
 
 
-# the canonical case under its own name, for callers that want it alone
-CANONICAL_CASE = Case(
-    R_n=0.0254, theta_c_deg=60.0, R_b=0.0762, R_s=0.00762,
-    mach=10.0, T_inf=220.0, p_inf=100.0, T_w=300.0,
-)
-
-WSL_DEFAULT_DISTRO = "Ubuntu-22.04"
-WSL_DEFAULT_ENV = "su2"
 _PYTHON_DEPS = ("numpy", "scipy", "matplotlib", "pyvista", "gmsh")
 
 
 # ============================================================================================
 #                                       mesh preset
 # ============================================================================================
-
-def sweep_mesh_kwargs(case: Case) -> dict:
-    """Mesh settings for the sweep: the validated recipe, scaled with the geometry.
-
-    The boundary layer must stay fine. It uses a growth ratio of 1.15, a first
-    cell at R_n/30000 and a total thickness of 0.06 R_n, and that resolution is
-    what holds the wall heat flux inside its tolerance. A coarser boundary layer
-    halves the cell count and costs far more than it saves: at a ratio of 1.2 and
-    a first cell at R_n/15000 the heat flux misses Fay-Riddell by 127% and the
-    shock smears, with the standoff 27% low.
-
-    The sweep gets its speed elsewhere. It stops on the residual at
-    ``conv_minval`` rather than at a fixed iteration count, and it warm-starts
-    inside a geometry cluster.
-    """
-    # a hard floor under the first cell height. R_n/30000 alone over-resolves
-    # the boundary layer on a small nose, and the heat flux then reads 22 to
-    # 26% above Fay-Riddell at R_n = 12 mm. the floor of 5e-7 m binds only
-    # below R_n = 15 mm, so every larger nose keeps the full R_n/30000 spacing.
-    bl_first = max(case.R_n / 30000.0, 5e-7)
-    return dict(
-        L_far=8.0 * case.R_b,
-        h_wall=case.R_n / 120.0,
-        h_far=8.0 * case.R_b / 25.0,
-        bl_first_height=bl_first,
-        bl_thickness=0.06 * case.R_n,
-        bl_ratio=1.15,
-        refine_shock_box=True,
-    )
-
-
-def _detect_invocation() -> tuple[str | None, str | None]:
-    """Return the distribution and conda environment to run SU2 in, for this host.
-
-    A SU2_CFD already on the executable search path returns ``(None, None)``,
-    and the caller invokes it directly.
-    """
-    if shutil.which("SU2_CFD"):
-        return None, None
-    return WSL_DEFAULT_DISTRO, WSL_DEFAULT_ENV
-
 
 # ============================================================================================
 #                                       single-case solve
@@ -203,7 +151,7 @@ def solve_case(
     if warm:
         shutil.copyfile(restart_src, run_dir / "solution_flow.dat")
         res = run_case(
-            case, run_dir=run_dir, mesh_kwargs=sweep_mesh_kwargs(case),
+            case, run_dir=run_dir, mesh_kwargs=mesh_settings(case.R_n, case.R_b),
             iter_max=iter_pass2, cfl_max=cfl_max, muscl=True, restart_sol=True,
             mglevel=mglevel, conv_minval=conv_minval,
             wsl_distro=wsl_distro, conda_env=conda_env, timeout=timeout,
@@ -212,7 +160,7 @@ def solve_case(
             raise RuntimeError(f"SU2 warm restart failed rc={res['returncode']}; see {res['log']}")
     else:
         res1 = run_case(
-            case, run_dir=run_dir, mesh_kwargs=sweep_mesh_kwargs(case),
+            case, run_dir=run_dir, mesh_kwargs=mesh_settings(case.R_n, case.R_b),
             iter_max=iter_pass1, cfl_max=cfl_max, muscl=False, restart_sol=False,
             mglevel=0, conv_minval=conv_minval,
             wsl_distro=wsl_distro, conda_env=conda_env, timeout=timeout,
@@ -225,7 +173,7 @@ def solve_case(
             raise RuntimeError("pass1 produced no restart_flow.dat")
         shutil.copyfile(restart_dat, run_dir / "solution_flow.dat")
         res = run_case(
-            case, run_dir=run_dir, mesh_kwargs=sweep_mesh_kwargs(case),
+            case, run_dir=run_dir, mesh_kwargs=mesh_settings(case.R_n, case.R_b),
             iter_max=iter_pass2, cfl_max=cfl_max, muscl=True, restart_sol=True,
             mglevel=mglevel, conv_minval=conv_minval,
             wsl_distro=wsl_distro, conda_env=conda_env, timeout=timeout,
@@ -256,8 +204,8 @@ def solve_case(
     # so that the ledger records a failure rather than a plausible number.
     if not standoff.get("valid", not np.isnan(delta)):
         raise RuntimeError(
-            f"shock standoff finder rejected the axis profile (method=none); "
-            f"likely a collapsed bow shock or under-converged pass 2"
+            "shock standoff finder rejected the axis profile (method=none); "
+            "likely a collapsed bow shock or under-converged pass 2"
         )
 
     summary = compare_to_analytical(
@@ -419,7 +367,7 @@ def preflight(args: argparse.Namespace) -> tuple[bool, str]:
     else:
         lines.append("  [ ok ] every Python dependency imports")
 
-    distro, env = _detect_invocation()
+    distro, env = detect_invocation()
     if distro is None:
         lines.append(f"  [ ok ] SU2_CFD on PATH: {shutil.which('SU2_CFD')}")
     else:
@@ -489,7 +437,7 @@ def validate_sample(args: argparse.Namespace) -> bool:
         return True
 
     valdir = workdir / "_validation"
-    distro, env = _detect_invocation()
+    distro, env = detect_invocation()
     full_sample = _build_stage2_sample()
     if only_case is not None:
         names = [n for n, _ in full_sample]
@@ -580,7 +528,7 @@ def validate_sample(args: argparse.Namespace) -> bool:
 def worker_loop(args: argparse.Namespace, worker_id: str, stop_flag) -> None:
     db_path = Path(args.db)
     workdir = Path(args.workdir)
-    wsl_distro, conda_env = _detect_invocation()
+    wsl_distro, conda_env = detect_invocation()
     deadline = time.time() + args.max_runtime_s if args.max_runtime_s > 0 else None
 
     L.reclaim_stale(db_path, max_age_s=args.stale_after_s)

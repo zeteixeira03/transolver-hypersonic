@@ -392,11 +392,13 @@ src/
   cfd/postprocess.py       # surface and axis-line readers, shock standoff
   cfd/ledger.py            # SQLite case ledger for the resumable sweep
   eval/sanity.py           # comparison against the analytical correlations
+  eval/metrics.py          # relative L2 and the names of the evaluation tiers
+  eval/uncertainty.py      # deep ensemble, spread and the trust/warn/refuse rule
   eval/plots.py            # acceptance figures
   data/airfrans.py         # AirfRANS dataset, normalization, loading
   data/sampler.py          # design-box sampling for the sweep
   data/su2.py              # SU2 case dataset, splits, normalization
-  training/loop.py         # training and evaluation loop
+  training/loop.py         # training and evaluation loop, for SU2 and AirfRANS
   models/transolver.py     # vendored Transolver (MIT, thuml/Transolver)
 configs/
   sphere_cone_template.cfg # SU2 axisymmetric laminar Navier-Stokes template

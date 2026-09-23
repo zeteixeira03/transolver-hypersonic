@@ -10,30 +10,22 @@ on this dataset.
 
 from __future__ import annotations
 
-import json
-import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
-
-torch = pytest.importorskip("torch")
-
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+import torch
 
 from scripts.prior_ablation import (
-    COMMON_CHANNELS,
     parse_run_dir,
     qw_abs_rel_median,
     render_table,
     tier_mean_rl2,
 )
-from scripts.train import QwSpec, collect_env, preflight_device, train_one_epoch
-from src.data.su2 import N_CASE_PARAMS, POS_DIM
+from scripts.train import QwSpec, collect_env, preflight_device
+from src.data.su2 import N_CASE_PARAMS, POS_DIM, TARGET_ORDER
 from src.models.transolver import Transolver
-
+from src.training.loop import train_one_epoch
 
 # ============================================================================================
 #                                       q_w encoding
@@ -196,11 +188,11 @@ def test_tier_mean_rl2_averages_common_channels_only():
     recs = [{"rL2": {"rho": 0.1, "u": 0.2, "v": 0.3, "T": 0.4, "p": 9.9}}]
     # pressure is excluded, which keeps a five-channel cell comparable to a
 # four-channel one
-    assert tier_mean_rl2(recs, COMMON_CHANNELS) == pytest.approx(0.25)
+    assert tier_mean_rl2(recs, TARGET_ORDER) == pytest.approx(0.25)
 
 
 def test_tier_mean_rl2_on_empty_split_is_none():
-    assert tier_mean_rl2([], COMMON_CHANNELS) is None
+    assert tier_mean_rl2([], TARGET_ORDER) is None
 
 
 def test_qw_columns_use_their_own_truths():

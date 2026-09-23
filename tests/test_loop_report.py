@@ -14,7 +14,6 @@ from scripts.loop_report import (
 )
 from src.data.sampler import FS_BOX, GEOM_BOX, us_standard_atmosphere
 
-
 # ============================================================================================
 #                                   parameter geometry
 # ============================================================================================

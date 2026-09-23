@@ -19,6 +19,7 @@ from pathlib import Path
 
 import numpy as np
 
+from src.cfd.runner import Case
 
 # ============================================================================================
 #                                       surface read
@@ -333,7 +334,7 @@ def find_shock_standoff(
 def extract_training_tensors(
     volume_vtu_path: str | Path,
     *,
-    case: "Case | None" = None,
+    case: Case | None = None,
     save_npz: str | Path | None = None,
 ) -> dict[str, np.ndarray]:
     """Extract per-mesh-node training arrays from a converged SU2 case.

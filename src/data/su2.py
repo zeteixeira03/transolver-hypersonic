@@ -41,6 +41,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
+from src.analytical import R_AIR
 
 # ============================================================================================
 #                                       channel layout
@@ -52,9 +53,7 @@ CASE_PARAM_ORDER = (
 )
 N_CASE_PARAMS = len(CASE_PARAM_ORDER)
 POS_DIM = 2                                   # (x, r)
-INPUT_DIM = POS_DIM + N_CASE_PARAMS           # 10
 TARGET_ORDER = ("rho", "u", "v", "T")
-TARGET_DIM = len(TARGET_ORDER)                # 4
 
 # the free-pressure layout drops the equation-of-state constraint and lets the
 # network emit pressure as a fifth channel. everywhere else the project
@@ -62,7 +61,6 @@ TARGET_DIM = len(TARGET_ORDER)                # 4
 # what that constraint is worth.
 TARGET_ORDER_WITH_P = TARGET_ORDER + ("p",)
 
-R_SPECIFIC_AIR = 287.058                      # J/(kg K), reconstruct p = rho R T
 
 
 # ============================================================================================
@@ -106,7 +104,7 @@ class SU2NormStats:
             [name in self.log_targets for name in self.targets], dtype=torch.bool,
         )
 
-    def to(self, device: torch.device) -> "SU2NormStats":
+    def to(self, device: torch.device) -> SU2NormStats:
         return SU2NormStats(
             x_mean=self.x_mean.to(device),
             x_std=self.x_std.to(device),
@@ -125,7 +123,7 @@ class SU2NormStats:
         }, str(path))
 
     @classmethod
-    def load(cls, path: str | Path) -> "SU2NormStats":
+    def load(cls, path: str | Path) -> SU2NormStats:
         d = torch.load(str(path), map_location="cpu")
         # a saved file may omit "targets" and "log_targets"; both fall back to
         # the four-channel layout
@@ -211,7 +209,7 @@ def stack_case_features(
     )                                                          # (N, 10)
     channels = [case_data["rho"], case_data["u"], case_data["v"], case_data["T"]]
     if with_p:
-        channels.append(case_data["rho"] * R_SPECIFIC_AIR * case_data["T"])
+        channels.append(case_data["rho"] * R_AIR * case_data["T"])
     targets = np.stack(channels, axis=1)                       # (N, 4) or (N, 5)
     return feats.astype(np.float32, copy=False), targets.astype(np.float32, copy=False)
 
@@ -407,7 +405,7 @@ def reconstruct_pressure(rho: torch.Tensor, T: torch.Tensor) -> torch.Tensor:
     The equation of state holds exactly at inference, because the network has
     no degree of freedom with which to break it.
     """
-    return rho * R_SPECIFIC_AIR * T
+    return rho * R_AIR * T
 
 
 # ============================================================================================
@@ -435,3 +433,95 @@ def case_id_from_npz_path(path: Path) -> int:
     """``case_0042/case.npz`` or ``case_0042.npz`` -> 42."""
     stem = path.parent.name if path.name == "case.npz" else path.stem
     return int(stem.split("_")[1])
+
+
+def case_name(path: Path) -> str:
+    """``case_0042/case.npz`` or ``case_0042.npz`` -> ``case_0042``."""
+    return path.parent.name if path.name == "case.npz" else path.stem
+
+
+# ============================================================================================
+#                                       splits
+# ============================================================================================
+
+OOD_GROUPS = ("cone_high", "mach_high", "nose_large", "nose_small")
+
+
+def split_paths(
+    paths: list[Path],
+    groups: dict[int, str],
+    geom_ids: dict[int, int],
+    val_frac: float,
+    test_frac: float,
+    seed: int,
+    interp_frac: float = 0.0,
+) -> dict[str, list[Path]]:
+    """Split the cases into training, validation and the evaluation tiers.
+
+    Inside the ``core`` group a seeded shuffle assigns whole geometries to one
+    split each. Cases that share a mesh sit close together in freestream space,
+    so splitting a geometry would leak between splits. Each extrapolation group
+    becomes a test tier of its own.
+
+    Above zero, ``interp_frac`` holds back that fraction of the cases on the
+    training geometries as ``test_interp``: seen shapes, unseen freestream. The
+    geometry shuffle runs first, so this never moves a geometry between the
+    validation and test splits.
+
+    Active-learning cases (``group_name == 'loop'``) always go to training and
+    stay out of the shuffle, so adding them leaves every held-out tier unchanged.
+    """
+    by_group: dict[str, list[Path]] = {"core": [], "loop": [], **{g: [] for g in OOD_GROUPS}}
+    for p in paths:
+        cid = case_id_from_npz_path(p)
+        if cid in groups:
+            by_group.setdefault(groups[cid], []).append(p)
+
+    core_by_geom: dict[int, list[Path]] = {}
+    for p in by_group["core"]:
+        core_by_geom.setdefault(geom_ids[case_id_from_npz_path(p)], []).append(p)
+
+    geoms = sorted(core_by_geom)
+    rng = np.random.default_rng(seed)
+    rng.shuffle(geoms)
+    n_val = max(1, int(round(len(geoms) * val_frac)))
+    n_test = max(1, int(round(len(geoms) * test_frac)))
+    val_geoms = sorted(geoms[:n_val])
+    test_geoms = sorted(geoms[n_val:n_val + n_test])
+    train_geoms = sorted(geoms[n_val + n_test:])
+
+    train = [p for g in train_geoms for p in core_by_geom[g]]
+    interp: list[Path] = []
+    if interp_frac > 0:
+        held = set(rng.permutation(len(train))[:int(round(len(train) * interp_frac))].tolist())
+        interp = [p for i, p in enumerate(train) if i in held]
+        train = [p for i, p in enumerate(train) if i not in held]
+    train += sorted(by_group["loop"], key=case_id_from_npz_path)
+
+    splits = {
+        "train": train,
+        "val": [p for g in val_geoms for p in core_by_geom[g]],
+        "test": [p for g in test_geoms for p in core_by_geom[g]],
+        "test_interp": interp,
+    }
+    for g in OOD_GROUPS:
+        splits[f"ood_{g}"] = by_group[g]
+    return splits
+
+
+def pin_splits(splits: dict[str, list[Path]], paths: list[Path],
+               pinned: dict[str, list[str]]) -> dict[str, list[Path]]:
+    """Replace the listed splits with fixed case lists, by case name.
+
+    A pinned list holds the exact membership of an earlier run, so a checkpoint
+    can be scored again on the same cases after the dataset grows. Names absent
+    from ``paths`` are dropped with a message.
+    """
+    by_name = {case_name(p): p for p in paths}
+    out = dict(splits)
+    for split, names in pinned.items():
+        missing = [n for n in names if n not in by_name]
+        if missing:
+            print(f"[pinned] {split}: {len(missing)} case(s) not in the dataset, dropped")
+        out[split] = [by_name[n] for n in names if n in by_name]
+    return out

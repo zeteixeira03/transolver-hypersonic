@@ -28,7 +28,6 @@ from pathlib import Path
 
 from src.geometry.sphere_cone import mesh_sphere_cone
 
-
 # ============================================================================================
 #                                 template substitution
 # ============================================================================================
@@ -186,6 +185,23 @@ class Case:
     T_inf: float        # freestream static temperature   [K]
     p_inf: float        # freestream static pressure      [Pa]
     T_w: float = 300.0  # isothermal wall temperature     [K]
+
+
+CANONICAL_CASE = Case(
+    R_n=0.0254, theta_c_deg=60.0, R_b=0.0762, R_s=0.00762,
+    mach=10.0, T_inf=220.0, p_inf=100.0, T_w=300.0,
+)
+
+
+def detect_invocation() -> tuple[str | None, str | None]:
+    """Return the Linux distribution and conda environment that hold SU2.
+
+    With ``SU2_CFD`` on the search path, as inside an active conda environment,
+    this returns ``(None, None)`` and the caller runs it directly.
+    """
+    if shutil.which("SU2_CFD"):
+        return None, None
+    return "Ubuntu-22.04", "su2"
 
 
 def run_case(

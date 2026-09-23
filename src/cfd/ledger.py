@@ -24,7 +24,6 @@ from pathlib import Path
 from src.cfd.runner import Case
 from src.data.sampler import CaseSpec, partition
 
-
 # ============================================================================================
 #                                       schema
 # ============================================================================================
@@ -284,16 +283,6 @@ def mark_failed(db_path: str | Path, case_id: int, error: str) -> None:
 #                                       reporting
 # ============================================================================================
 
-def case_status(db_path: str | Path, case_id: int) -> str | None:
-    """Return the ``status`` of one case, or None if it is not in the ledger."""
-    con = connect(db_path)
-    try:
-        row = con.execute("SELECT status FROM cases WHERE case_id=?", (case_id,)).fetchone()
-        return row["status"] if row else None
-    finally:
-        con.close()
-
-
 def case_row(db_path: str | Path, case_id: int) -> sqlite3.Row | None:
     """Return the full row for one case, or None if it is not in the ledger.
 
@@ -333,19 +322,24 @@ def recent_done(db_path: str | Path, limit: int = 50) -> list[sqlite3.Row]:
         con.close()
 
 
-def all_done(db_path: str | Path) -> list[sqlite3.Row]:
-    """Return every finished case in ``ord`` order, for the final quality plot."""
-    con = connect(db_path)
-    try:
-        return con.execute("SELECT * FROM cases WHERE status='done' ORDER BY ord").fetchall()
-    finally:
-        con.close()
-
-
 def all_rows(db_path: str | Path) -> list[sqlite3.Row]:
     """Return every case row in ``ord`` order, for the dataset manifest."""
     con = connect(db_path)
     try:
         return con.execute("SELECT * FROM cases ORDER BY ord").fetchall()
+    finally:
+        con.close()
+
+
+def read_cases(db_path: str | Path) -> dict[int, dict]:
+    """Return every row as ``{case_id: {column: value}}`` without writing anything.
+
+    The connection opens read-only and immutable, which works on a read-only
+    mount such as a Kaggle input directory, where ``connect`` would fail.
+    """
+    con = sqlite3.connect(f"file:{Path(db_path).as_posix()}?mode=ro&immutable=1", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        return {int(r["case_id"]): dict(r) for r in con.execute("SELECT * FROM cases")}
     finally:
         con.close()

@@ -37,8 +37,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import sqlite3
-import sys
 from pathlib import Path
 
 import matplotlib
@@ -48,15 +46,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.stats import spearmanr, wilcoxon
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from scripts.ensemble_uq import chan_mean, tier_label, tiers_present
-from scripts.train import load_case_geom_ids, load_case_groups, split_paths
+from src.cfd.ledger import read_cases
 from src.data.sampler import FS_BOX, GEOM_BOX, us_standard_atmosphere
-from src.data.su2 import list_case_npzs
-
+from src.data.su2 import CASE_PARAM_ORDER, case_name, list_case_npzs, split_paths
+from src.eval.metrics import channel_mean, tier_label, tiers_present
 
 # ============================================================================================
 #                                       constants
@@ -142,15 +135,11 @@ def load_loop_points(ledger: Path) -> np.ndarray:
     numpy.ndarray
         Array of shape (n_loop, 6).
     """
-    cols = "R_n, theta_c_deg, R_b, R_s, mach, T_inf, p_inf, T_w"
-    with sqlite3.connect(ledger) as con:
-        rows = con.execute(
-            f"select {cols} from cases where group_name = 'loop' and status = 'done'"
-        ).fetchall()
+    rows = [r for r in read_cases(ledger).values()
+            if r["group_name"] == "loop" and r["status"] == "done"]
     if not rows:
         raise SystemExit(f"no converged loop cases in {ledger}")
-    keys = [c.strip() for c in cols.split(",")]
-    return np.array([scan_coords(dict(zip(keys, r))) for r in rows])
+    return np.array([scan_coords(r) for r in rows])
 
 
 def nearest_loop_distance(recs: list[dict], loop_pts: np.ndarray) -> np.ndarray:
@@ -178,20 +167,11 @@ def pre_loop_train_points(workdir: Path, seed: int = 0) -> np.ndarray:
     numpy.ndarray
         Array of shape (n_train_pre_loop, 6).
     """
-    ledger = workdir / "ledger.db"
-    paths = list_case_npzs(workdir)
-    splits = split_paths(paths, load_case_groups(ledger), load_case_geom_ids(ledger),
-                         0.1, 0.1, seed, 0.1)
-    cols = "R_n, theta_c_deg, R_b, R_s, mach, T_inf, p_inf, T_w"
-    keys = [c.strip() for c in cols.split(",")]
-    with sqlite3.connect(ledger) as con:
-        params = {f"case_{cid:04d}": dict(zip(keys, row)) for cid, *row
-                  in con.execute(f"select case_id, {cols} from cases "
-                                 f"where status = 'done' and group_name != 'loop'")}
-
-    def case_name(p: Path) -> str:
-        return p.parent.name if p.name == "case.npz" else p.stem
-
+    rows = read_cases(workdir / "ledger.db")
+    splits = split_paths(list_case_npzs(workdir), {c: r["group_name"] for c, r in rows.items()},
+                         {c: int(r["geom_id"]) for c, r in rows.items()}, 0.1, 0.1, seed, 0.1)
+    params = {f"case_{c:04d}": {k: r[k] for k in CASE_PARAM_ORDER} for c, r in rows.items()
+              if r["status"] == "done" and r["group_name"] != "loop"}
     names = [case_name(p) for p in splits["train"]]
     return np.array([scan_coords(params[n]) for n in names if n in params])
 
@@ -229,10 +209,10 @@ def pair_records(before: list[dict], after: list[dict]) -> list[dict]:
             "name": r["name"],
             "split": r["split"],
             "case_params": r["case_params"],
-            "err_before": chan_mean(b["rL2_ens"]),
-            "err_after": chan_mean(r["rL2_ens"]),
-            "spread_before": chan_mean(b["spread"]),
-            "spread_after": chan_mean(r["spread"]),
+            "err_before": channel_mean(b["rL2_ens"]),
+            "err_after": channel_mean(r["rL2_ens"]),
+            "spread_before": channel_mean(b["spread"]),
+            "spread_after": channel_mean(r["spread"]),
         })
     n_only = len(before) - len(paired), len(after) - len(paired)
     if any(n_only):

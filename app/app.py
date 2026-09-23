@@ -9,25 +9,18 @@ it behind a spinner.
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import matplotlib
+
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
+from inference import R_B_RATIO, R_S_RATIO, load_default_ensemble, predict
 from matplotlib.colors import LogNorm, Normalize
 from matplotlib.tri import Triangulation
 
-ROOT = Path(__file__).resolve().parents[1]
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
-
-from inference import (
-    GUARD_DIST, KN_MAX, R_B_RATIO, R_S_RATIO, T_WALL, WARN_SPREAD,
-    load_ensemble, predict,
-)
+from src.data.sampler import FS_BOX, GEOM_BOX, KN_MAX, T_WALL
+from src.eval.uncertainty import GUARD_DIST
 
 # ============================================================================================
 #                                       page config
@@ -51,55 +44,38 @@ DECISION_STYLE = {
                "ensemble disagrees strongly. Run a full simulation instead."),
 }
 
-# the training box per exposed control, which drives the indicator under each
-# slider
+# the training box per exposed control, shown under each slider
 ENVELOPE_BOX = {
-    "mach": (8.0, 25.0),
-    "altitude": (45.0, 60.0),
-    "R_n_mm": (10.0, 50.0),
-    "theta_c": (35.0, 70.0),
+    "mach": FS_BOX["mach"],
+    "altitude": FS_BOX["altitude"],
+    "R_n_mm": tuple(1000.0 * v for v in GEOM_BOX["R_n"]),
+    "theta_c": GEOM_BOX["theta_c"],
 }
 
-# injected once. it drives the flashing chip that marks a slider outside the box.
-OOD_CSS = """
-<style>
-@keyframes oodflash {
-  0%   { background:#cf222e; box-shadow:0 0 0 0 #cf222e88; }
-  50%  { background:#ff5a5a; box-shadow:0 0 0 4px #cf222e00; }
-  100% { background:#cf222e; box-shadow:0 0 0 0 #cf222e88; }
-}
-.ood-chip { display:inline-block; padding:2px 10px; border-radius:11px; color:#fff;
-  font-size:0.76rem; font-weight:700; margin:-6px 0 6px 0;
-  animation: oodflash 0.7s ease-in-out infinite; }
-.ok-chip { display:inline-block; padding:2px 10px; border-radius:11px;
-  font-size:0.76rem; font-weight:600; margin:-6px 0 6px 0;
-  background:#1a7f3722; color:#1a7f37; }
-</style>
-"""
 
-
-def envelope_chip(value: float, lo: float, hi: float, unit: str = "") -> str:
-    """Return a flashing chip when the value leaves the training box, else a calm one."""
+def envelope_note(value: float, lo: float, hi: float, unit: str = "") -> str:
+    """Say whether the value sits inside the training box."""
     if value < lo:
-        return f'<div class="ood-chip">OUT OF ENVELOPE, below {lo:g}{unit}</div>'
+        return f":red[outside the training box, below {lo:g}{unit}]"
     if value > hi:
-        return f'<div class="ood-chip">OUT OF ENVELOPE, above {hi:g}{unit}</div>'
-    return f'<div class="ok-chip">in envelope ({lo:g} to {hi:g}{unit})</div>'
+        return f":red[outside the training box, above {hi:g}{unit}]"
+    return f"inside the training box ({lo:g} to {hi:g}{unit})"
 
 
 @st.cache_resource
 def get_ensemble():
-    return load_ensemble()
+    return load_default_ensemble()
 
 
 @st.cache_data(show_spinner=False)
 def cached_predict(R_n_mm: float, theta_c: float, mach: float, altitude: float):
     """Cache on the rounded slider values, so a change of field costs nothing."""
-    pred = predict(get_ensemble(), R_n=R_n_mm / 1000.0, theta_c_deg=theta_c,
+    ens, thresholds = get_ensemble()
+    pred = predict(ens, thresholds, R_n=R_n_mm / 1000.0, theta_c_deg=theta_c,
                    mach=mach, altitude_km=altitude)
     # a plain dict, because Streamlit hashes the return value to cache it
     return {
-        "coords": pred.coords, "fields": pred.fields, "n_nodes": pred.n_nodes,
+        "coords": pred.coords, "fields": pred.fields, "n_nodes": len(pred.coords),
         "spread": pred.spread, "distance": pred.distance, "kn": pred.kn,
         "decision": pred.decision, "qoi": pred.qoi, "params": pred.params,
     }
@@ -150,20 +126,18 @@ def field_figure(coords: np.ndarray, values: np.ndarray, name: str, R_b: float) 
 #                                       sidebar controls
 # ============================================================================================
 
-st.markdown(OOD_CSS, unsafe_allow_html=True)
 st.sidebar.title("Flight condition")
-st.sidebar.caption("Each slider's green chip turns to a flashing red warning the moment "
-                   "the value leaves the trained envelope. Ranges extend past the box so "
-                   "you can probe extrapolation.")
+st.sidebar.caption("The sliders reach past the training box, so you can see how "
+                   "the surrogate behaves outside it.")
 
 mach = st.sidebar.slider("Mach number", 8.0, 30.0, 15.0, 0.5)
-st.sidebar.markdown(envelope_chip(mach, *ENVELOPE_BOX["mach"]), unsafe_allow_html=True)
+st.sidebar.caption(envelope_note(mach, *ENVELOPE_BOX["mach"]))
 altitude = st.sidebar.slider("Altitude [km]", 40.0, 70.0, 52.0, 1.0)
-st.sidebar.markdown(envelope_chip(altitude, *ENVELOPE_BOX["altitude"], unit=" km"), unsafe_allow_html=True)
+st.sidebar.caption(envelope_note(altitude, *ENVELOPE_BOX["altitude"], unit=" km"))
 R_n_mm = st.sidebar.slider("Nose radius R_n [mm]", 5.0, 80.0, 25.0, 1.0)
-st.sidebar.markdown(envelope_chip(R_n_mm, *ENVELOPE_BOX["R_n_mm"], unit=" mm"), unsafe_allow_html=True)
+st.sidebar.caption(envelope_note(R_n_mm, *ENVELOPE_BOX["R_n_mm"], unit=" mm"))
 theta_c = st.sidebar.slider("Cone half-angle θ_c [deg]", 35.0, 80.0, 50.0, 1.0)
-st.sidebar.markdown(envelope_chip(theta_c, *ENVELOPE_BOX["theta_c"], unit="°"), unsafe_allow_html=True)
+st.sidebar.caption(envelope_note(theta_c, *ENVELOPE_BOX["theta_c"], unit="°"))
 
 _ood = [n for n, v, k in (("Mach", mach, "mach"), ("altitude", altitude, "altitude"),
                           ("R_n", R_n_mm, "R_n_mm"), ("θ_c", theta_c, "theta_c"))
@@ -216,7 +190,7 @@ st.markdown(
 g1, g2, g3, g4 = st.columns(4)
 g1.metric("Envelope distance", f"{pred['distance']:.3f}", help=f"L-inf box exceedance; guard at {GUARD_DIST}")
 g2.metric("Knudsen number", f"{pred['kn']:.4f}", help=f"continuum floor {KN_MAX}")
-g3.metric("Ensemble spread", f"{pred['spread']:.3f}", help=f"warn at {WARN_SPREAD}")
+g3.metric("Ensemble spread", f"{pred['spread']:.3f}", help=f"warn at {get_ensemble()[1]['warn']:.3f}")
 g4.metric("Mesh nodes", f"{pred['n_nodes']:,}")
 
 st.markdown("---")
@@ -242,16 +216,3 @@ with right:
                "near-wall thermal gradient, so its direct heat-flux estimate is "
                "unreliable and is not shown.")
 
-    st.markdown("---")
-    st.subheader("Need a trusted answer?")
-    if st.button("Request full SU2 simulation", use_container_width=True):
-        p = pred["params"]
-        st.info(
-            "Placeholder only: this demo does not run SU2 and nothing is submitted "
-            "anywhere. In a deployed system this button would hand the case below to "
-            "the offline simulation pipeline, an SU2 axisymmetric Navier-Stokes run. "
-            "That pipeline is the trusted answer when a case is refused or when the "
-            "stakes are high. The surrogate above is the instant estimate.\n\n"
-            f"Case: R_n={p['R_n']*1e3:.1f} mm, θ_c={p['theta_c_deg']:.1f}°, M={p['mach']:.1f}, "
-            f"T∞={p['T_inf']:.0f} K, p∞={p['p_inf']:.1f} Pa, T_w={p['T_w']:.0f} K."
-        )
