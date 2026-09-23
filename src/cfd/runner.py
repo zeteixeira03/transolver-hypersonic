@@ -1,22 +1,22 @@
-"""Render an SU2 cfg from the sphere-cone template and invoke SU2_CFD.
+"""Render an SU2 configuration from the sphere-cone template and run SU2_CFD.
 
-The high-level entry point :func:`run_case` takes a case-parameter dict and a
-run directory and produces:
+The entry point :func:`run_case` takes a set of case parameters and a run
+directory, and leaves behind:
 
     <run_dir>/
-        case.su2              # mesh (written here by mesh_sphere_cone)
-        case.cfg              # rendered SU2 config
-        flow.vtu              # volume solution (Paraview format)
+        case.su2              # mesh, written by mesh_sphere_cone
+        case.cfg              # rendered SU2 configuration
+        flow.vtu              # volume solution, Paraview format
         surface_flow.vtu      # surface solution
         surface_flow.csv      # surface scalar values per node
-        restart_flow.dat      # SU2 restart
+        restart_flow.dat      # SU2 restart file
         history.csv           # convergence history
-        su2.log               # stdout/stderr of SU2_CFD
+        su2.log               # standard output and error of SU2_CFD
 
-The runner can invoke SU2_CFD natively (Linux/Mac, when SU2_CFD is on PATH)
-or via WSL by setting ``wsl_distro`` and ``conda_env``. The Windows-host
-development workflow is WSL+conda; production dataset generation on Kaggle
-runs Linux natively.
+The runner reaches SU2_CFD two ways. On Linux and macOS it calls the binary
+directly, which needs SU2_CFD on the executable search path. On a Windows host
+it calls into the Windows Subsystem for Linux, which needs both ``wsl_distro``
+and ``conda_env``. Dataset generation on Kaggle takes the direct path.
 """
 
 from __future__ import annotations
@@ -55,9 +55,9 @@ def render_cfg(
     surface_name: str = "surface_flow",
     restart_name: str = "restart_flow",
 ) -> Path:
-    """Render the SU2 cfg template with concrete case values.
+    """Substitute concrete case values into the SU2 configuration template.
 
-    Returns the path to the written cfg.
+    Returns the path of the written configuration file.
     """
     text = Path(template_path).read_text()
     replacements = {
@@ -89,7 +89,7 @@ def render_cfg(
 # ============================================================================================
 
 def _windows_to_wsl_path(p: Path) -> str:
-    """Translate a Windows absolute path to a /mnt/<drive>/... WSL path."""
+    """Translate an absolute Windows path into its ``/mnt/<drive>/...`` form."""
     s = str(p)
     if len(s) >= 2 and s[1] == ":":
         drive = s[0].lower()
@@ -108,20 +108,24 @@ def run_su2(
     log_filename: str = "su2.log",
     timeout: float | None = None,
 ) -> subprocess.CompletedProcess:
-    """Invoke SU2_CFD on a rendered cfg.
+    """Run SU2_CFD on a rendered configuration file.
 
     Parameters
     ----------
     cfg_path : path
-        Rendered SU2 cfg file. The run directory defaults to its parent.
+        The rendered SU2 configuration file. The run directory defaults to the
+        parent of this file.
     wsl_distro : str, optional
-        If provided, SU2_CFD is invoked inside this WSL distribution; cfg/mesh
-        paths are translated. Required on Windows hosts.
+        Name of a Windows Subsystem for Linux distribution. When given, SU2_CFD
+        runs inside it and the configuration and mesh paths are translated to
+        their Linux form. A Windows host needs this.
     conda_env : str, optional
-        Conda env name to activate before running SU2_CFD (e.g. ``su2``).
+        Name of a conda environment to activate before SU2_CFD starts, such as
+        ``su2``.
     nprocs : int
-        If > 1, run with ``mpirun -np <nprocs> SU2_CFD``. SU2 must be built
-        with MPI support inside the chosen env.
+        Above 1, the command becomes ``mpirun -np <nprocs> SU2_CFD``. The SU2
+        build in the chosen environment must carry Message Passing Interface
+        support.
     """
     cfg_path = Path(cfg_path)
     run_dir = Path(run_dir) if run_dir else cfg_path.parent
@@ -129,7 +133,8 @@ def run_su2(
     cfg_name = cfg_path.name
 
     if wsl_distro is None:
-        # native invocation: assume cwd = run_dir, SU2_CFD on PATH
+        # direct call. the working directory is the run directory, and SU2_CFD
+        # must sit on the executable search path
         if shutil.which("SU2_CFD") is None:
             raise RuntimeError("SU2_CFD not found on PATH; set wsl_distro or activate the env")
         if nprocs > 1:
@@ -142,7 +147,8 @@ def run_su2(
                 check=False, timeout=timeout,
             )
 
-    # WSL invocation: translate paths and assemble a bash command
+    # call through the Windows Subsystem for Linux: translate the paths, then
+    # assemble one bash command
     wsl_run_dir = _windows_to_wsl_path(run_dir)
     if conda_env:
         env_prefix = (
@@ -172,14 +178,14 @@ def run_su2(
 @dataclass
 class Case:
     """Sphere-cone hypersonic case parameters."""
-    R_n: float          # nose radius                [m]
-    theta_c_deg: float  # cone half-angle            [deg]
-    R_b: float          # body max radius            [m]
-    R_s: float          # shoulder rounding radius   [m]
+    R_n: float          # nose radius                     [m]
+    theta_c_deg: float  # cone half-angle                 [deg]
+    R_b: float          # maximum body radius             [m]
+    R_s: float          # shoulder rounding radius        [m]
     mach: float         # freestream Mach number
-    T_inf: float        # freestream static T        [K]
-    p_inf: float        # freestream static p        [Pa]
-    T_w: float = 300.0  # isothermal wall T          [K]
+    T_inf: float        # freestream static temperature   [K]
+    p_inf: float        # freestream static pressure      [Pa]
+    T_w: float = 300.0  # isothermal wall temperature     [K]
 
 
 def run_case(
@@ -202,27 +208,29 @@ def run_case(
     log_filename: str = "su2.log",
     cfg_filename: str = "case.cfg",
 ) -> dict:
-    """Run a sphere-cone hypersonic case end-to-end.
+    """Run one sphere-cone hypersonic case from parameters to output files.
 
-    Steps: mesh (gmsh) -> cfg (template substitute) -> SU2_CFD -> return paths.
+    Four steps: mesh with gmsh, substitute the configuration template, run
+    SU2_CFD, and return the paths of everything written.
 
     Parameters
     ----------
     case : Case
         Case parameters.
     run_dir : path
-        Directory for all run artifacts. Created if absent.
+        Directory for every file the run produces. Created if absent.
     mesh_kwargs : dict, optional
-        Extra kwargs forwarded to :func:`mesh_sphere_cone` (e.g. ``L_far``,
-        ``h_wall``, ``bl_first_height``).
+        Extra keyword arguments passed on to :func:`mesh_sphere_cone`, such as
+        ``L_far``, ``h_wall`` and ``bl_first_height``.
     muscl : bool
-        If True, run second-order with the configured slope limiter; if False,
-        run first-order. First-order is the robust startup for hypersonic.
+        True runs second order with the configured slope limiter. False runs
+        first order, which is what a hypersonic case needs from a cold start.
     restart_sol : bool
-        If True, SU2 reads the existing ``solution_flow.dat`` for initial
-        conditions. Used for the second-order stage of a two-pass solve.
+        True makes SU2 take its initial condition from an existing
+        ``solution_flow.dat``. The second-order pass of a two-pass solve sets
+        this.
     write_mesh : bool
-        If False, expect ``case.su2`` to already exist in ``run_dir``.
+        False expects ``case.su2`` to exist in ``run_dir`` already.
     """
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)

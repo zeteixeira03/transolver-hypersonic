@@ -1,4 +1,4 @@
-"""Unit tests for the loop before/after report's parameter geometry."""
+"""Tests for how the before-and-after report places cases in parameter space."""
 
 from __future__ import annotations
 
@@ -41,8 +41,8 @@ def test_box_center_maps_to_half():
 
 
 def test_ood_case_falls_outside_unit_box():
-    # nose_large slab: R_n above the core box, so its first coordinate exceeds
-    # 1. R_b and R_s scale with it to hold both aspect ratios fixed.
+    # the nose_large slab puts R_n above the core box, so the first coordinate
+    # passes 1. R_b and R_s scale with it, which holds both ratios fixed.
     case = box_center_case()
     scale = 0.080 / case["R_n"]
     case["R_n"], case["R_b"], case["R_s"] = 0.080, case["R_b"] * scale, case["R_s"] * scale

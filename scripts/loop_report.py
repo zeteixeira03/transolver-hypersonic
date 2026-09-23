@@ -1,29 +1,28 @@
-"""Before/after report for one active-learning loop iteration.
+"""Report on one iteration of the active-learning loop, before against after.
 
-Compares two deep ensembles trained on the same split with the same recipe,
-differing only in whether the loop-acquired SU2 cases were in the training
-set (v2 without, v3 with). Both ensembles' per-case records come from
-``scripts/ensemble_uq.py``, so this script is pure analysis and reruns in
-seconds.
+The report compares two deep ensembles trained on the same split with the same
+recipe. They differ in one thing: the treatment ensemble carries the acquired
+SU2 cases in its training set and the control ensemble does not. Both sets of
+per-case records come from ``scripts/ensemble_uq.py``, so this script is
+analysis alone and runs in seconds.
 
-Measuring spread or error *at the acquired points* would be close to
-tautological: those cases sit in v3's train split and were never in v2's, so
-v3 is guaranteed to look better there. That is fitting, not generalization,
-and this report deliberately does not use it as evidence. The three things
-it does measure are all held out:
+Error measured *at the acquired points themselves* proves nothing. Those cases
+sit in the training split of the treatment and were never in the control, so the
+treatment must win there. That is a fit, not generalization, and this report
+does not present it as evidence. All three measurements below are held out.
 
-1. Paired tier comparison. Identical eval cases in both ensembles, so the
-   per-case difference is paired and a signed-rank test applies.
-2. Neighborhood generalization. Held-out error near the acquired points
-   versus far from them, in normalized six-dimensional parameter distance.
-   A working loop should show up here first: adding data at a point should
-   help most in its neighborhood.
-3. No-regression. How many held-out cases got worse, and by how much.
+1. The paired tier comparison. Both ensembles hold the same evaluation cases,
+   so the difference per case is paired and a signed-rank test applies.
+2. Generalization near the acquired points. It compares held-out error close to
+   an acquired point against held-out error far from one, in normalized
+   six-dimensional parameter distance. A loop that works shows here first,
+   because data added at a point helps most around that point.
+3. Regression. It counts the held-out cases that got worse, and by how much.
 
-Distances run over the six free design axes (nose radius, cone half-angle,
-the two aspect ratios, Mach, altitude), each divided by its core-box width,
-so a distance of 1.0 means one full box width. Altitude is recovered from
-the freestream pressure by inverting the atmosphere model.
+Distance runs over the six free design axes: nose radius, cone half-angle, the
+two ratios, Mach number and altitude. Each axis is divided by the width of the
+core box on that axis, so a distance of 1.0 spans one full box. Altitude is
+recovered from the freestream pressure by inverting the atmosphere model.
 
 Usage
 -----
@@ -74,7 +73,7 @@ SCAN_SPANS = {
     "altitude": FS_BOX["altitude"],
 }
 
-# in-distribution tiers; the loop acquired inside the core box, so the OOD
+# the tiers inside the box. acquisition ran inside the core box, so the
 # slabs are all far from every acquired point by construction and carry no
 # neighborhood signal
 NEIGHBORHOOD_TIERS = ("test", "test_interp")
@@ -100,7 +99,8 @@ def altitude_from_pressure(p_inf: float) -> float:
     float
         Altitude in km, by interpolation on a precomputed monotone grid.
     """
-    # pressure falls monotonically with altitude, so reverse both for np.interp
+    # pressure falls as altitude rises, and np.interp needs a rising x, so both
+    # grids are reversed
     return float(np.interp(p_inf, _P_GRID[::-1], _ALT_GRID[::-1]))
 
 
@@ -115,8 +115,8 @@ def scan_coords(params: dict[str, float]) -> np.ndarray:
     Returns
     -------
     numpy.ndarray
-        Length-6 vector; 0 and 1 are the core-box edges on each axis. OOD
-        cases fall outside [0, 1], which is the intended behavior.
+        A vector of length 6. On each axis 0 and 1 mark the edges of the core
+        box. An extrapolation case falls outside [0, 1], which is intended.
     """
     raw = {
         "R_n": params["R_n"],
@@ -162,16 +162,16 @@ def nearest_loop_distance(recs: list[dict], loop_pts: np.ndarray) -> np.ndarray:
 def pre_loop_train_points(workdir: Path, seed: int = 0) -> np.ndarray:
     """Normalized coordinates of the training cases that predate the loop.
 
-    Gives the distance bins a scale reference: if held-out cases sit farther
-    from every acquired point than from the data the model already had, a
-    local effect has little room to show up.
+    These points give the distance bins a scale to sit against. A held-out case
+    that lies farther from every acquired point than from the data the model
+    already had leaves a local effect little room to appear.
 
     Parameters
     ----------
     workdir : pathlib.Path
-        Dataset workdir with case npzs and ledger.db.
+        Dataset directory holding the case tensors and ledger.db.
     seed : int
-        Split seed, matching the one both ensembles trained under.
+        Split seed. It must match the one both ensembles trained under.
 
     Returns
     -------
@@ -213,8 +213,8 @@ def pair_records(before: list[dict], after: list[dict]) -> list[dict]:
     Returns
     -------
     list of dict
-        One entry per shared case with ``err_before``, ``err_after``,
-        ``spread_before``, ``spread_after``, the split, and the case params.
+        One entry per shared case, carrying ``err_before``, ``err_after``,
+        ``spread_before``, ``spread_after``, the split, and the case parameters.
     """
     by_name = {r["name"]: r for r in before}
     paired = []
@@ -241,7 +241,7 @@ def pair_records(before: list[dict], after: list[dict]) -> list[dict]:
 
 
 def boot_ci(x: np.ndarray, n_boot: int = 10000, seed: int = 0) -> tuple[float, float]:
-    """Percentile bootstrap 95% interval for the mean of ``x``."""
+    """Bootstrap the 95% percentile interval for the mean of ``x``."""
     rng = np.random.default_rng(seed)
     means = rng.choice(x, size=(n_boot, len(x)), replace=True).mean(axis=1)
     return float(np.quantile(means, 0.025)), float(np.quantile(means, 0.975))
@@ -252,8 +252,11 @@ def boot_ci(x: np.ndarray, n_boot: int = 10000, seed: int = 0) -> tuple[float, f
 # ============================================================================================
 
 def tier_table(paired: list[dict]) -> str:
-    """Markdown: per-tier mean error before and after, with a signed-rank test."""
-    lines = ["| tier | n | before | after | delta | 95% CI | p |",
+    """Render the mean error per tier, before and after, as Markdown.
+
+    Each row carries a bootstrap interval and the p-value of a signed-rank test.
+    """
+    lines = ["| tier | n | before | after | delta | 95% interval | p |",
              "|" + "---|" * 7]
     for split in tiers_present(paired):
         rows = [r for r in paired if r["split"] == split]
@@ -271,12 +274,12 @@ def tier_table(paired: list[dict]) -> str:
 def neighborhood_table(paired: list[dict], loop_pts: np.ndarray,
                        train_pts: np.ndarray | None = None,
                        n_bins: int = 3) -> tuple[str, np.ndarray, np.ndarray]:
-    """Markdown: held-out error by distance to the nearest acquired point.
+    """Render held-out error against distance to the nearest acquired point.
 
     Parameters
     ----------
     paired : list of dict
-        Paired records, filtered to the in-distribution tiers by the caller.
+        Paired records. The caller filters them to the tiers inside the box.
     loop_pts : numpy.ndarray
         Normalized coordinates of the acquired cases.
     train_pts : numpy.ndarray or None
@@ -298,7 +301,8 @@ def neighborhood_table(paired: list[dict], loop_pts: np.ndarray,
 
     edges = np.quantile(dist, np.linspace(0, 1, n_bins + 1))
     edges[-1] += 1e-9
-    lines = ["| distance to nearest acquired point | n | before | after | delta | 95% CI |",
+    lines = ["| distance to nearest acquired point | n | before | after "
+             "| delta | 95% interval |",
              "|" + "---|" * 6]
     for lo, hi in zip(edges[:-1], edges[1:]):
         m = (dist >= lo) & (dist < hi)
@@ -326,7 +330,7 @@ def neighborhood_table(paired: list[dict], loop_pts: np.ndarray,
 
 
 def regression_table(paired: list[dict], n_worst: int = 5) -> str:
-    """Markdown: how many held-out cases got worse, and the worst of them."""
+    """Render how many held-out cases got worse, with the worst of them."""
     d = np.array([r["err_after"] - r["err_before"] for r in paired])
     worse = int((d > 0).sum())
     lines = [f"{worse} of {len(d)} held-out cases got worse ({worse / len(d):.0%}); "
@@ -347,7 +351,7 @@ def regression_table(paired: list[dict], n_worst: int = 5) -> str:
 
 def neighborhood_figure(dist: np.ndarray, delta: np.ndarray, fig_out: Path,
                         n_bins: int = 6) -> None:
-    """Per-case error change against distance to the nearest acquired point."""
+    """Plot the error change of each case against its distance to an acquired point."""
     fig, ax = plt.subplots(figsize=(7, 4.5))
     ax.scatter(dist, delta, s=18, alpha=0.6, color="steelblue",
                label="held-out case")

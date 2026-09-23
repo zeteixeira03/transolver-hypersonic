@@ -1,8 +1,8 @@
 """Unit tests for parametric sphere-cone geometry and gmsh meshing.
 
-The analytical key-point math is checked directly; the gmsh mesh step is a
-smoke test that runs only if gmsh is importable. Marker presence in the
-written .su2 file is verified by string search.
+The closed-form key points are checked directly. The meshing step only runs
+where gmsh imports, and it checks that the run completes and that the written
+.su2 file carries every expected boundary marker.
 """
 
 from __future__ import annotations
@@ -31,9 +31,9 @@ def test_sphere_cone_points_60deg_sphere():
     # P2 and P3 lie on the shoulder arc
     assert _dist(pts["P2"], pts["shoulder_center"]) == pytest.approx(R_s, rel=1e-12)
     assert _dist(pts["P3"], pts["shoulder_center"]) == pytest.approx(R_s, rel=1e-12)
-    # P3 is at body max radius
+    # P3 sits at the maximum body radius
     assert pts["P3"][1] == pytest.approx(R_b, rel=1e-12)
-    # shoulder center is directly below P3 (vertical tangent at top)
+    # the shoulder centre sits directly below P3, so the tangent there is vertical
     assert pts["shoulder_center"][0] == pytest.approx(pts["P3"][0], rel=1e-12)
 
 
@@ -49,7 +49,7 @@ def test_sphere_cone_p2_lies_on_cone_line():
 
 
 def test_sphere_cone_points_70deg_apollo_like():
-    # Apollo-style 70 / 33 / 0.4564 m geometry, rough
+    # close to the Apollo shape: 70 degrees, 33 degrees, 0.4564 m
     R_n, theta_c, R_b, R_s = 0.305, 33.0, 0.4566, 0.0457
     pts = sphere_cone_points(R_n, theta_c, R_b, R_s)
     assert pts["P1"][0] > 0

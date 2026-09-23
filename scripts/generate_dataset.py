@@ -1,37 +1,40 @@
 """Dataset generation pipeline.
 
-One command, four stages, all resumable:
+One command runs four stages, and every stage resumes after an interruption:
 
-    1. preflight   -- check SU2 is callable and the Python deps import
-    2. validate    -- solve the canonical validation case with the sweep settings
-                      (loosened mesh, residual-driven convergence) and confirm it
-                      still clears Fay-Riddell / Rayleigh-Pitot / Billig; write a
-                      marker so this runs only once
-    3. generate    -- build (or resume) a SQLite work ledger over a nested
-                      geometry x freestream DOE and run N worker processes that
-                      mesh, solve (warm-starting within a geometry cluster),
-                      postprocess, sanity-check, and write per-node tensors;
-                      a supervisor fires a quality plot every --quality-every
-                      finished cases and stops the run if the success rate drops
-                      below 70%
-    4. package     -- once every case is terminal, write a manifest, copy the
-                      ledger, optionally tarball the tensors and push to a
-                      Hugging Face dataset
+    1. preflight   -- check that SU2 runs and that every Python dependency
+                      imports
+    2. validate    -- solve a small sample of cases with the sweep settings and
+                      confirm that they still clear Fay-Riddell, Rayleigh-Pitot
+                      and Billig. a marker file keeps this to one run.
+    3. generate    -- build or resume a SQLite ledger over the nested sample of
+                      geometries and freestreams, then run N worker processes.
+                      each worker meshes, solves, warm-starts inside a geometry
+                      cluster, reads the outputs, checks them, and writes the
+                      per-node tensor. a supervisor draws a quality plot every
+                      --quality-every finished cases and stops the run when the
+                      success rate falls below 70%.
+    4. package     -- once every case has reached a terminal state, write a
+                      manifest, copy the ledger, and on request build a tarball
+                      of the tensors and push it to a Hugging Face dataset
 
-Designed for an always-on box (Oracle Cloud Always Free A1, 4 cores): one DB on
-local disk, one worker per core, no session limit. ``scripts/setup_oracle.sh``
-provisions such a box and launches this under ``nohup``. The ledger's block
-layout also supports static partitioning across machines (``--block K``).
+The pipeline targets a machine that stays on, such as an Oracle Cloud Always
+Free A1 with four cores. It keeps one database on local disk and one worker per
+core, and no session limit cuts it short. ``scripts/setup_oracle.sh`` provisions
+such a machine and starts this under ``nohup``. The block column of the ledger
+also lets several machines split the sweep between them, through ``--block K``.
 
-Run from the project root::
+Run it from the project root::
 
     python scripts/generate_dataset.py --workdir data/raw/sweep --workers 4
 
-Useful flags: ``--init-only`` (build ledger, stop), ``--dry-run`` (preflight +
-plan, no SU2), ``--no-validate`` (skip stage 2), ``--validate-only``,
-``--package-only``, ``--revalidate``, ``--force`` (proceed despite a preflight
-warning), ``--hf-repo OWNER/NAME`` (needs ``HF_TOKEN``). On a Windows host the
-SU2 call auto-routes through WSL; on Linux ``SU2_CFD`` is invoked directly.
+The flags worth knowing: ``--init-only`` builds the ledger and stops,
+``--dry-run`` runs the preflight and prints the plan without calling SU2,
+``--no-validate`` skips the validation stage, and ``--validate-only``,
+``--package-only`` and ``--revalidate`` each run one stage alone. ``--force``
+proceeds past a preflight warning. ``--hf-repo OWNER/NAME`` pushes the result
+and needs ``HF_TOKEN`` in the environment. On a Windows host the SU2 call routes
+through the Windows Subsystem for Linux. On Linux it calls ``SU2_CFD`` directly.
 """
 
 from __future__ import annotations
@@ -68,10 +71,9 @@ from src.data.sampler import sample_cases
 from src.eval.sanity import compare_to_analytical, format_summary
 
 
-# stage-2 validation sample: 5 cases spanning corners of the sweep design box.
-# Replaces a single canonical case, which silently validated only the regime
-# closest to the original acceptance recipe; that recipe then stalled on most
-# of the actual sweep (sharp cones, high Mach).
+# the validation sample: 5 cases that reach the corners of the sweep design box.
+# one case near the middle of the box cannot show whether the recipe holds at
+# a sharp cone or at high Mach, and those are where it strains.
 def _stage2_case(R_n: float, theta_c: float, R_b_ratio: float, R_s_ratio: float,
                  mach: float, altitude_km: float | None,
                  T_inf: float | None = None, p_inf: float | None = None,
@@ -87,8 +89,8 @@ def _stage2_case(R_n: float, theta_c: float, R_b_ratio: float, R_s_ratio: float,
                 mach=mach, T_inf=T_inf, p_inf=p_inf, T_w=T_w)
 
 
-# (name, case) -- order matters: the canonical case is first so a partial
-# run still informs whether the recipe regresses on the validated baseline.
+# pairs of (name, case). the order matters: the canonical case comes first, so
+# even a partial run says whether the recipe still holds on the known baseline.
 def _build_stage2_sample() -> list[tuple[str, Case]]:
     return [
         ("canonical",        _stage2_case(0.0254, 60.0, 3.0,  0.10, 10.0, None,
@@ -101,7 +103,7 @@ def _build_stage2_sample() -> list[tuple[str, Case]]:
     ]
 
 
-# kept for back-compat with anything still importing CANONICAL_CASE
+# the canonical case under its own name, for callers that want it alone
 CANONICAL_CASE = Case(
     R_n=0.0254, theta_c_deg=60.0, R_b=0.0762, R_s=0.00762,
     mach=10.0, T_inf=220.0, p_inf=100.0, T_w=300.0,
@@ -117,23 +119,23 @@ _PYTHON_DEPS = ("numpy", "scipy", "matplotlib", "pyvista", "gmsh")
 # ============================================================================================
 
 def sweep_mesh_kwargs(case: Case) -> dict:
-    """Sweep mesh: the canonical validation recipe, scaled with geometry.
+    """Mesh settings for the sweep: the validated recipe, scaled with the geometry.
 
-    An earlier attempt loosened the boundary layer (ratio 1.2, first cell
-    R_n/15000) for ~2x fewer cells; stage-2 validation showed it blows the
-    Fay-Riddell heat-flux check (+127%) and smears the shock (standoff -27%).
-    The single-case finding stands: the fine BL (ratio 1.15, first cell R_n/30000,
-    0.06 R_n thick) is what puts the wall heat flux in tolerance, so it is kept.
-    The per-case speedup in the sweep comes from residual-driven convergence
-    (stop at ``conv_minval`` instead of a fixed iteration count) and warm-starting
-    within a geometry cluster, not from a coarser mesh.
+    The boundary layer must stay fine. It uses a growth ratio of 1.15, a first
+    cell at R_n/30000 and a total thickness of 0.06 R_n, and that resolution is
+    what holds the wall heat flux inside its tolerance. A coarser boundary layer
+    halves the cell count and costs far more than it saves: at a ratio of 1.2 and
+    a first cell at R_n/15000 the heat flux misses Fay-Riddell by 127% and the
+    shock smears, with the standoff 27% low.
+
+    The sweep gets its speed elsewhere. It stops on the residual at
+    ``conv_minval`` rather than at a fixed iteration count, and it warm-starts
+    inside a geometry cluster.
     """
-    # absolute floor on bl first cell: pure R_n/30000 scaling drives an
-    # over-resolved BL for small-nose cases (smallnose_midM, R_n=12mm,
-    # q_w +26%/+22% over Fay-Riddell on two runs). Flooring at 5e-7
-    # keeps the canonical recipe untouched (R_n>=15mm cases keep their
-    # original R_n/30000 spec) while coarsening small-nose just enough
-    # to bring the wall heat flux back down.
+    # a hard floor under the first cell height. R_n/30000 alone over-resolves
+    # the boundary layer on a small nose, and the heat flux then reads 22 to
+    # 26% above Fay-Riddell at R_n = 12 mm. the floor of 5e-7 m binds only
+    # below R_n = 15 mm, so every larger nose keeps the full R_n/30000 spacing.
     bl_first = max(case.R_n / 30000.0, 5e-7)
     return dict(
         L_far=8.0 * case.R_b,
@@ -147,7 +149,11 @@ def sweep_mesh_kwargs(case: Case) -> dict:
 
 
 def _detect_invocation() -> tuple[str | None, str | None]:
-    """Return (wsl_distro, conda_env): (None, None) if SU2_CFD is on PATH."""
+    """Return the distribution and conda environment to run SU2 in, for this host.
+
+    A SU2_CFD already on the executable search path returns ``(None, None)``,
+    and the caller invokes it directly.
+    """
     if shutil.which("SU2_CFD"):
         return None, None
     return WSL_DEFAULT_DISTRO, WSL_DEFAULT_ENV
@@ -173,19 +179,23 @@ def solve_case(
 ) -> dict:
     """Solve one case end to end, returning the postprocessed sanity quantities.
 
-    If ``restart_src`` exists (the predecessor's ``restart_flow.dat`` on the same
-    mesh), do a single second-order solve restarting from it; otherwise the
-    two-pass first-order-startup + second-order recipe. Pass 2 runs a fixed
-    ``iter_pass2`` iterations -- the wall heat flux lags the density residual by
-    thousands of iters, so an early residual stop under-resolves the thermal
-    layer; ``conv_minval`` is just a low safety floor.
+    Where ``restart_src`` exists, it is the ``restart_flow.dat`` of a case on the
+    same mesh, and one second-order solve restarts from it. Otherwise the case
+    takes the two-pass recipe: a first-order pass to start, then a second-order
+    pass.
+
+    The second pass runs a fixed ``iter_pass2`` iterations. The wall heat flux
+    settles thousands of iterations after the density residual does, so a stop
+    driven by the residual leaves the thermal layer under-resolved.
+    ``conv_minval`` sits far below that point and acts as a safety floor alone.
 
     Returns
     -------
     dict
-        ``qw``, ``p02``, ``standoff``, ``rel`` ({name: rel_err}),
-        ``checks_passed``, ``warm_started``, ``npz`` (path to the training
-        tensor), ``summary`` (the raw :func:`compare_to_analytical` dict).
+        ``qw``, ``p02`` and ``standoff`` as measured values. ``rel`` as
+        ``{name: relative error}``. ``checks_passed`` and ``warm_started`` as
+        flags. ``npz`` as the path of the training tensor. ``summary`` as the
+        full dict from :func:`compare_to_analytical`.
     """
     run_dir.mkdir(parents=True, exist_ok=True)
     warm = restart_src is not None and Path(restart_src).exists()
@@ -224,7 +234,8 @@ def solve_case(
         if res["returncode"] != 0:
             raise RuntimeError(f"SU2 pass2 failed rc={res['returncode']}; see {res['log']}")
 
-    # postprocess: off-axis stagnation extraction, same convention as the validation case
+    # read the outputs. every stagnation quantity comes from off the axis, on the
+    # same convention the single-case validation uses.
     R_n = case.R_n
     L_far = 8.0 * case.R_b
     surface = extract_surface(res["surface_vtu"])
@@ -239,10 +250,10 @@ def solve_case(
     p02 = float(p02)
     delta = float(standoff["standoff"])
 
-    # a degenerate shock pick (collapsed onto the body or no shock at all on
-    # the sample line) means the field is broken in a way no postprocess
-    # tolerance is going to salvage; fail the case so the ledger marks it
-    # failed instead of recording garbage as "done OUT-OF-TOL"
+    # no valid shock pick means the field is broken, either with the shock
+    # collapsed onto the body or with no shock on the sample line at all. no
+    # tolerance on the output side can recover such a field. fail the case,
+    # so that the ledger records a failure rather than a plausible number.
     if not standoff.get("valid", not np.isnan(delta)):
         raise RuntimeError(
             f"shock standoff finder rejected the axis profile (method=none); "
@@ -256,9 +267,10 @@ def solve_case(
     npz_path = run_dir / "case.npz"
     extract_training_tensors(res["volume_vtu"], case=case, save_npz=npz_path)
 
-    # drop the bulky intermediates once the tensor is out; restart_flow.dat stays
-    # (a successor in the same geometry cluster restarts from it), the mesh and the
-    # conservative-only surface CSV are regenerable and not worth ~GBs over 780 cases
+    # delete the large intermediate files once the tensor is written.
+    # restart_flow.dat stays, because the next case in the geometry cluster
+    # restarts from it. the mesh and the thin surface .csv file can both be
+    # rebuilt, and together they would cost gigabytes across the sweep.
     for junk in ("flow.vtu", "solution_flow.dat", "case.su2", "surface_flow.csv"):
         p = run_dir / junk
         if p.exists():
@@ -273,11 +285,11 @@ def solve_case(
 
 
 # ============================================================================================
-#                                       HF upload
+#                                   hugging face upload
 # ============================================================================================
 
 def _maybe_upload_file(path: Path, repo: str | None, path_in_repo: str) -> None:
-    """Best-effort push of one file to a HF dataset; never fatal."""
+    """Push one file to a Hugging Face dataset. A failure here never stops the run."""
     if not repo:
         return
     try:
@@ -286,8 +298,8 @@ def _maybe_upload_file(path: Path, repo: str | None, path_in_repo: str) -> None:
             path_or_fileobj=str(path), path_in_repo=path_in_repo,
             repo_id=repo, repo_type="dataset", token=os.environ.get("HF_TOKEN"),
         )
-    except Exception as exc:  # noqa: BLE001 -- upload is opportunistic
-        print(f"[upload] {path_in_repo}: HF upload failed: {exc}")
+    except Exception as exc:  # noqa: BLE001 -- an upload never stops the run
+        print(f"[upload] {path_in_repo}: upload failed: {exc}")
 
 
 # ============================================================================================
@@ -295,16 +307,16 @@ def _maybe_upload_file(path: Path, repo: str | None, path_in_repo: str) -> None:
 # ============================================================================================
 
 MIN_SUCCESS_RATE = 0.70
-WARMUP_CASES = 30  # do not enforce the stop rule until this many cases have finished/failed
-# catastrophic-failure thresholds for the gate-based stop rule. these are well
-# outside any plausible systematic postprocess bias (the p02 plateau median runs
-# ~5-10% low on healthy cases, the sd finder ~10-15% low) and cleanly separate
-# the "shock collapsed onto body" cluster (qw +100 to +600%, p02 -50 to -95%,
-# sd -45 to -80%) seen in the first sweep attempt.
+WARMUP_CASES = 30  # the stop rule waits until this many cases end
+# the thresholds that mark a case as broken rather than inaccurate. they sit far
+# outside the bias the readers themselves carry: on a healthy case the median of
+# the pressure plateau reads 5 to 10% low, and the standoff finder 10 to 15% low.
+# they also sit clear of the collapsed-shock cluster, which shows a heat flux 100
+# to 600% high, a stagnation pressure 50 to 95% low, and a standoff 45 to 80% low.
 _CATASTROPHIC = {
-    "qw_rel_max":  0.50,    # qw rel err > +50% means the BL solution diverged
-    "p02_rel_min": -0.25,   # p02 rel err < -25% means the post-shock plateau collapsed
-    "sd_rel_min":  -0.30,   # standoff rel err < -30% means the bow shock is on the body
+    "qw_rel_max":  0.50,    # a heat flux 50% high means the boundary layer diverged
+    "p02_rel_min": -0.25,   # a stagnation pressure 25% low means that plateau collapsed
+    "sd_rel_min":  -0.30,   # a standoff 30% low means the bow shock sits on the body
 }
 MAX_CATASTROPHIC_RATE = 0.30  # halt if > this fraction of the last window are catastrophic
 _GATE_TOLS = {"stagnation_heat_flux": 0.15, "stagnation_pressure": 0.05, "shock_standoff": 0.20}
@@ -316,10 +328,10 @@ _GATE_TITLES = {
 
 
 def run_quality_gate(db_path: Path, workdir: Path, window: int) -> tuple[bool, str]:
-    """Plot rel-error vs Mach for the last ``window`` finished cases.
+    """Plot the relative error against Mach number over the last ``window`` cases.
 
-    Returns ``(ok, message)``; ``ok`` is False only when the run success rate
-    has dropped below :data:`MIN_SUCCESS_RATE` after the warm-up.
+    Returns ``(ok, message)``. ``ok`` is False only once the success rate of the
+    run falls below :data:`MIN_SUCCESS_RATE`, and only after the warm-up window.
     """
     import matplotlib
     matplotlib.use("Agg")
@@ -387,7 +399,10 @@ def run_quality_gate(db_path: Path, workdir: Path, window: int) -> tuple[bool, s
 # ============================================================================================
 
 def preflight(args: argparse.Namespace) -> tuple[bool, str]:
-    """Check SU2 is callable and the Python deps import. Returns (ok, report)."""
+    """Check that SU2 runs and that every Python dependency imports.
+
+    Returns ``(ok, report)``.
+    """
     lines = []
     ok = True
 
@@ -402,7 +417,7 @@ def preflight(args: argparse.Namespace) -> tuple[bool, str]:
         lines.append(f"  [FAIL] missing Python modules: {', '.join(missing)}")
         lines.append(f"         pip install {' '.join(missing)}")
     else:
-        lines.append("  [ ok ] Python deps import")
+        lines.append("  [ ok ] every Python dependency imports")
 
     distro, env = _detect_invocation()
     if distro is None:
@@ -415,13 +430,13 @@ def preflight(args: argparse.Namespace) -> tuple[bool, str]:
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
             if r.returncode == 0 and r.stdout.strip():
-                lines.append(f"  [ ok ] SU2_CFD via WSL {distro}/{env}: {r.stdout.strip()}")
+                lines.append(f"  [ ok ] SU2_CFD in {distro}/{env}: {r.stdout.strip()}")
             else:
                 ok = False
-                lines.append(f"  [FAIL] SU2_CFD not found via WSL {distro}/{env}")
+                lines.append(f"  [FAIL] SU2_CFD not found in {distro}/{env}")
         except Exception as exc:  # noqa: BLE001
             ok = False
-            lines.append(f"  [FAIL] could not invoke WSL: {exc}")
+            lines.append(f"  [FAIL] could not reach the Linux subsystem: {exc}")
 
     if args.hf_repo and not os.environ.get("HF_TOKEN"):
         lines.append("  [warn] --hf-repo set but HF_TOKEN is not in the environment; uploads will fail")
@@ -435,30 +450,30 @@ def preflight(args: argparse.Namespace) -> tuple[bool, str]:
 # ============================================================================================
 
 def validate_sample(args: argparse.Namespace) -> bool:
-    """Solve the 5-case diverse stage-2 sample with the sweep settings.
+    """Solve the five-case validation sample with the sweep settings.
 
-    The first sweep attempt validated only the canonical case (theta_c=60,
-    M=10), which sits in the regime where the original acceptance recipe was
-    tuned. The recipe cleared that case but stalled on most of the sweep --
-    sharp cones (theta_c < 50) and high Mach (M > 18) with the bow shock
-    collapsed onto the body. Validating on a diverse stage-2 sample catches
-    those failure modes before any sweep cycles are burned.
+    The sample must span the corners of the design box. A recipe tuned near the
+    middle can clear the canonical case at theta_c = 60 and Mach 10 and still
+    stall across most of the sweep, with the bow shock collapsed onto the body
+    at a sharp cone below 50 degrees or above Mach 18. Five cases catch that
+    before the sweep spends any solver time.
 
-    The five cases (see :func:`_build_stage2_sample`) span the corners:
-    canonical (blunt + low-M baseline), sharp+low-M, blunt+high-M,
-    small-nose+mid-M, and the sharp+high-M anchor (sampler[0]). Each
-    must complete without an exception. Gate misses are logged but do not
-    block the sweep -- the per-case tolerances in
-    :mod:`src.eval.sanity` are 5/15/20% against approximate analytical
-    correlations whose accuracy itself degrades near the design-box
-    corners (Billig drifts at very high Mach; Fay-Riddell tightens
-    against mesh resolution at small R_n). The ledger's separate success
-    rate (completed / total) is the real go/no-go gate; gates are
-    advisory data-quality flags.
+    :func:`_build_stage2_sample` builds them: the blunt low-Mach canonical case,
+    a sharp low-Mach case, a blunt high-Mach case, a small-nose case at middle
+    Mach, and a sharp high-Mach anchor. Every one must run to completion without
+    raising.
 
-    Writes ``<workdir>/.validated`` on success. ``--revalidate`` forces
-    a re-run; ``--no-validate`` skips altogether. Returns True iff every case
-    completes (no exception); the marker records per-case rel errors.
+    A missed gate is logged and does not stop the sweep. The tolerances in
+    :mod:`src.eval.sanity` are 5, 15 and 20% against approximate correlations
+    that themselves lose accuracy at the corners of the box. Billig drifts at
+    very high Mach, and Fay-Riddell grows sensitive to mesh resolution at a
+    small nose radius. The success rate in the ledger, which is completed over
+    total, decides whether the sweep proceeds. The gates flag data quality and
+    advise.
+
+    A success writes ``<workdir>/.validated``. ``--revalidate`` runs the stage
+    again and ``--no-validate`` skips it. Returns True only when every case
+    completes, and the marker file records the relative error of each one.
     """
     workdir = Path(args.workdir)
     marker = workdir / ".validated"
@@ -583,11 +598,11 @@ def worker_loop(args: argparse.Namespace, worker_id: str, stop_flag) -> None:
             return
         case_id, case, restart_from = claim
         run_dir = workdir / f"case_{case_id:04d}"
-        # warm-start guard: only restart from a predecessor that finished cleanly
-        # AND cleared the three analytical gates. a "done OUT-OF-TOL" predecessor
-        # is a collapsed-shock solution; warm-starting from it propagates the
-        # collapsed field through the geometry cluster (see analyze_gates2: 38/39
-        # broken cases were warm-started in the first sweep attempt)
+        # restart only from a case that both finished without error and cleared the
+        # three analytical gates. a case that finished outside tolerance
+        # usually carries a collapsed shock, and a restart from it spreads
+        # that collapsed field through the whole geometry cluster. of 39
+        # broken cases measured in one sweep, 38 had warm-started this way.
         restart_src = None
         if restart_from is not None:
             prev = L.case_row(db_path, int(restart_from))
@@ -620,7 +635,11 @@ def worker_loop(args: argparse.Namespace, worker_id: str, stop_flag) -> None:
 
 
 def run_generation(args: argparse.Namespace) -> None:
-    """Spawn the workers and supervise: quality gate every N done, stop on collapse."""
+    """Start the workers and supervise them.
+
+    The supervisor runs the quality gate every N finished cases and stops the
+    run when the success rate collapses.
+    """
     workdir = Path(args.workdir)
     stop_flag = mp.Value("b", False)
     procs = [
@@ -663,8 +682,12 @@ _MANIFEST_COLS = (
 
 
 def package_dataset(args: argparse.Namespace) -> None:
-    """Once every case is terminal, write the manifest, copy the ledger, and
-    (optionally) tarball the tensors and push the lot to a HF dataset."""
+    """Package the finished sweep, once every case has reached a terminal state.
+
+    The function writes the manifest and copies the ledger. On request it also
+    builds a tarball of the tensors and pushes everything to a Hugging Face
+    dataset.
+    """
     db_path = Path(args.db)
     workdir = Path(args.workdir)
     counts = L.status_counts(db_path)
@@ -713,21 +736,22 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--db", default=None, help="ledger path (default <workdir>/ledger.db)")
     p.add_argument("--workers", type=int, default=4, help="worker processes")
     p.add_argument("--block", type=int, default=None, help="pin workers to one block (multi-machine)")
-    # sampling / ledger build
+    # sampling and ledger construction
     p.add_argument("--n-geom", type=int, default=70, help="core geometries")
     p.add_argument("--n-fs", type=int, default=10, help="freestreams per core geometry")
     p.add_argument("--n-geom-ood", type=int, default=10, help="geometries per OOD slab")
     p.add_argument("--n-fs-ood", type=int, default=2, help="freestreams per OOD geometry")
     p.add_argument("--n-blocks", type=int, default=4, help="contiguous ledger blocks")
     p.add_argument("--seed", type=int, default=0, help="LHS seed")
-    # solver knobs
-    # the 2500 + 8000 / mglevel=0 single-case validation recipe clears the
-    # canonical case but stalls at rms ~ -4.77 with the bow shock collapsed
-    # onto the body for sharp cones and high-Mach geometries. Geometric
-    # multigrid (mglevel=2) breaks the saddle: pass 2 then settles to rms ~ -6
-    # with the shock at a physically correct standoff. CD plateaus by ~iter
-    # 12-14k, so iter_pass2=16000 covers the slow drift; the diverse stage-2
-    # sample confirms the recipe across blunt/sharp x lo/hi Mach corners.
+    # solver settings.
+    # geometric multigrid at mglevel 2 is required across the box, not an
+    # optimization. without it a sharp cone or a high-Mach geometry stalls with
+    # the residual near -4.77 and the bow shock collapsed onto the body. with it
+    # the second pass settles near -6 and the shock stands at a physical
+    # distance. the drag coefficient reaches its plateau between iteration 12000
+    # and 14000, so iter_pass2 = 16000 covers the slow drift after it. the
+    # five-case sample confirms the recipe at the blunt, sharp, low-Mach and
+    # high-Mach corners.
     p.add_argument("--iter-pass1", type=int, default=2500, help="first-order startup iterations")
     p.add_argument("--iter-pass2", type=int, default=16000, help="second-order iterations")
     p.add_argument("--conv-minval", type=float, default=-8.0,

@@ -1,22 +1,24 @@
-"""Single-case SU2 validation: canonical Mach 10 sphere-cone end-to-end.
+"""Validate the whole simulation pipeline on one canonical Mach 10 case.
 
-Pipeline: mesh (gmsh) -> render SU2 cfg -> run SU2_CFD -> parse outputs ->
-compare to Fay-Riddell / Rayleigh-Pitot / Billig -> emit acceptance figure
-and a summary JSON.
+The script meshes with gmsh, renders the SU2 configuration, runs SU2_CFD, reads
+the outputs, compares three quantities against Fay-Riddell, Rayleigh-Pitot and
+Billig, and writes an acceptance figure with a summary in JSON.
 
-The validation case (Anderson Hypersonic-style cold-wall reentry):
+The case is a cold-wall re-entry body of the kind Anderson works through:
+
     R_n         = 0.0254 m   (1 inch)
     theta_c     = 60 deg
     R_b         = 0.0762 m
     R_s         = 0.00762 m
     M_inf       = 10
     T_inf       = 220 K
-    p_inf       = 100 Pa     (~ 60 km altitude)
+    p_inf       = 100 Pa     (near 60 km altitude)
     T_w         = 300 K      (isothermal cold wall)
 
-Run from the project root. On Windows hosts the script auto-routes the SU2
-call into WSL (distro "Ubuntu-22.04", conda env "su2"); on Linux/Kaggle the
-SU2_CFD binary is invoked directly if found on PATH.
+Run it from the project root. Where SU2_CFD sits on the executable search path,
+the script calls it directly. Otherwise it routes the call into the Windows
+Subsystem for Linux, using the distribution "Ubuntu-22.04" and the conda
+environment "su2".
 """
 
 from __future__ import annotations
@@ -32,7 +34,8 @@ from pathlib import Path
 
 import numpy as np
 
-# project root on sys.path so "from src..." works when running as a script
+# put the project root on the import path, so "from src..." resolves when this
+# file runs as a script
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -79,11 +82,11 @@ DEFAULT_MESH_KWARGS = dict(
 # ============================================================================================
 
 def detect_invocation() -> tuple[str | None, str | None]:
-    """Return (wsl_distro, conda_env) for the current host.
+    """Return the distribution and conda environment to run SU2 in, for this host.
 
-    If SU2_CFD is on PATH (e.g. inside a Linux conda env already active),
-    return (None, None) to invoke natively. Otherwise default to the
-    Windows/WSL development setup.
+    A SU2_CFD on the executable search path, as inside an already active conda
+    environment, returns ``(None, None)`` and the caller invokes it directly.
+    Anything else returns the Windows Subsystem for Linux setup.
     """
     if shutil.which("SU2_CFD"):
         return None, None
@@ -104,16 +107,16 @@ def make_acceptance_figure(
 
     fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))
 
-    # surface nodes are sorted by r along the body so the wall plots run
-    # smoothly from stagnation (r=0) up the sphere, along the cone, and
-    # around the shoulder
+    # sort the surface nodes by r, so a wall plot runs in one sweep from the
+    # stagnation point at r = 0, up the sphere, along the cone and around the
+    # shoulder
     x, y = surface["x"], surface["y"]
     order = np.argsort(y)
     x_s = x[order]
     y_s = y[order]
     s = np.cumsum(np.concatenate([[0.0], np.hypot(np.diff(x_s), np.diff(y_s))]))
 
-    # ---- surface pressure vs arc length ----
+    # ---- surface pressure against arc length ----
     ax = axes[0, 0]
     if "p" in surface:
         p_s = surface["p"][order]
@@ -126,7 +129,7 @@ def make_acceptance_figure(
         ax.legend(loc="best", fontsize=8)
         ax.set_ylim(bottom=0)
 
-    # ---- surface heat flux vs arc length ----
+    # ---- surface heat flux against arc length ----
     ax = axes[0, 1]
     if "qw" in surface:
         qw_s = surface["qw"][order]
@@ -138,9 +141,9 @@ def make_acceptance_figure(
                    label=f"Fay-Riddell q_w = {summary['ref_qw']:.3g} W/m^2")
         ax.legend(loc="best", fontsize=8)
 
-    # ---- axis-line pressure (shock standoff) ----
+    # ---- pressure along the axis line, which locates the shock ----
     ax = axes[1, 0]
-    # zoom to ~0.5 R_n upstream of body, where the shock sits
+    # frame about 0.5 R_n upstream of the body, where the shock stands
     x_axis = axis["x"]
     R_n = case.R_n
     mask = x_axis > -0.5 * R_n
@@ -180,21 +183,21 @@ def make_acceptance_figure(
 def main():
     parser = argparse.ArgumentParser(description="canonical sphere-cone validation case")
     parser.add_argument("--run-dir", default="data/raw/cfd_validation",
-                        help="output directory for run artifacts")
+                        help="directory for every file the run writes")
     parser.add_argument("--iter-pass1", type=int, default=3000,
-                        help="iterations for first-order startup")
+                        help="iterations of the first-order pass")
     parser.add_argument("--iter-pass2", type=int, default=15000,
-                        help="iterations for second-order continuation")
+                        help="iterations of the second-order pass")
     parser.add_argument("--cfl-max", type=float, default=5.0)
     parser.add_argument("--nprocs", type=int, default=1)
     parser.add_argument("--skip-su2", action="store_true",
-                        help="skip SU2_CFD (postprocess an existing run)")
+                        help="skip SU2_CFD and read the outputs of an existing run")
     parser.add_argument("--wsl-distro", default=None,
-                        help="override WSL distro (default: auto-detect)")
+                        help="name the Linux distribution instead of detecting it")
     parser.add_argument("--conda-env", default=None,
-                        help="override conda env (default: auto-detect)")
+                        help="name the conda environment instead of detecting it")
     parser.add_argument("--timeout", type=float, default=None,
-                        help="SU2 wall-clock timeout in seconds")
+                        help="wall-clock limit on one SU2 run, in seconds")
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir).resolve()
@@ -218,7 +221,7 @@ def main():
             "returncode": 0,
         }
     else:
-        # ---- pass 1: first-order startup ----
+        # ---- first pass: first order, which converges from a cold start ----
         t0 = time.time()
         result_p1 = run_case(
             CANONICAL,
@@ -242,7 +245,8 @@ def main():
             print(f"[validate] pass 1 failed; see {result_p1['log']}")
             sys.exit(2)
 
-        # promote restart_flow.dat to solution_flow.dat for pass 2 read-in
+        # the second pass reads solution_flow.dat, so rename the restart file
+        # the first pass wrote
         restart_dat = run_dir / "restart_flow.dat"
         solution_dat = run_dir / "solution_flow.dat"
         if not restart_dat.exists():
@@ -250,7 +254,7 @@ def main():
             sys.exit(2)
         shutil.copyfile(restart_dat, solution_dat)
 
-        # ---- pass 2: second-order, restart ----
+        # ---- second pass: second order, restarted from the first ----
         t0 = time.time()
         result = run_case(
             CANONICAL,
@@ -277,15 +281,16 @@ def main():
               f"{result['log']}")
         sys.exit(2)
 
-    # ---- postprocess ----
-    # Off-axis stagnation extraction. The wall node at r=0 carries an
-    # axisymmetric source-term singularity that inflates both pressure and
-    # heat flux at the geometric stagnation point. Standard practice is to
-    # skip a thin band near the axis. The "stagnation pressure" reference
-    # for Rayleigh-Pitot comparison is the post-shock plateau on a stagnation
-    # streamline OFFSET from the axis; the body-wall value matches it in
-    # subsonic shock-layer theory but here it is contaminated by the axis
-    # artifact, so we report the plateau directly.
+    # ---- read the outputs ----
+    # every stagnation quantity is taken off the axis rather than on it. the
+    # wall node at r = 0 carries the singularity of the axisymmetric source
+    # term, which inflates both pressure and heat flux there, and the accepted
+    # practice is to skip a thin band above the axis.
+    #
+    # the stagnation pressure that Rayleigh-Pitot predicts is read as the
+    # plateau behind the shock on a streamline offset from the axis. subsonic
+    # shock-layer theory says the value at the body wall equals it, but the axis
+    # artifact corrupts the wall value here, so the plateau is reported instead.
     R_n = CANONICAL.R_n
     L_far = DEFAULT_MESH_KWARGS["L_far"]
     y_skip = 0.05 * R_n
@@ -299,7 +304,8 @@ def main():
     standoff = find_shock_standoff(axis, p_inf=CANONICAL.p_inf)
 
     su2_qw = stag.get("qw", float("nan"))
-    # stagnation pressure = plateau median behind the shock on the offset axis line
+    # the stagnation pressure is the median of the plateau behind the shock,
+    # taken on the offset axis line
     su2_p02 = standoff.get("p_post_plateau", float("nan"))
     if np.isnan(su2_p02):
         su2_p02 = stag.get("p", float("nan"))
@@ -343,7 +349,7 @@ def main():
     make_acceptance_figure(CANONICAL, surface, axis, summary, standoff, fig_path)
     print(f"[validate] acceptance figure written to {fig_path}")
 
-    # ---- training-tensor extraction (smoke test for the dataset sweep) ----
+    # ---- extract the training tensors, which also tests that path ----
     npz_path = run_dir / "case.npz"
     tensors = extract_training_tensors(result["volume_vtu"], save_npz=npz_path)
     print(f"[validate] training tensors written to {npz_path} "

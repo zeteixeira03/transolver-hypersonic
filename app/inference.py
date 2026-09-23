@@ -1,16 +1,17 @@
-"""Slider params to deep-ensemble flow-field prediction for the dashboard.
+"""Turn the dashboard controls into a deep-ensemble prediction of the flow.
 
-One public entry point, :func:`predict`, takes the four exposed controls
-(Mach, altitude, nose radius, cone half-angle), meshes the geometry live
-with the same gmsh recipe the training data used, runs the five ensemble
-members on the mesh nodes, and returns per-node fields, the ensemble
-spread, two scalar quantities of interest with uncertainty bands, and the
-trust/warn/refuse decision.
+One entry point, :func:`predict`, takes the four exposed controls, which are
+Mach number, altitude, nose radius and cone half-angle. It meshes the geometry
+through the same gmsh recipe that produced the training data, runs the five
+ensemble members over the mesh nodes, and returns the per-node fields, the
+ensemble spread, two scalar quantities of interest with their uncertainty
+bands, and the decision to trust, warn or refuse.
 
-The model is sensitive to mesh resolution (its slice attention couples all
-nodes), so the app meshes at the training-resolution kwargs rather than a
-coarser cloud. That makes one prediction take tens of seconds on a small
-CPU; the UI wraps it in a spinner.
+The mesh resolution has to match the one the model saw in training, because
+slice attention couples every node to every other one. A coarser cloud shifts
+the prediction. Meshing at full resolution is what makes one prediction take
+tens of seconds on a small processor, so the interface runs it behind a
+spinner.
 """
 from __future__ import annotations
 
@@ -42,18 +43,20 @@ ENSEMBLE_DIRS = [
     ROOT / f"data/processed/ensemble_v3/run_m32_v3_s{s}" for s in range(5)
 ]
 
-# controls not exposed as sliders are fixed at box midpoints / the training wall
+# every control without a slider holds at the midpoint of the training box, or
+# at the wall temperature the whole dataset shares
 R_B_RATIO = 3.0      # R_b / R_n, GEOM_BOX midpoint
 R_S_RATIO = 0.10     # R_s / R_b, near the box midpoint
 T_WALL = 300.0       # K, isothermal cold wall (fixed across the whole dataset)
 
-# decision thresholds, recalibrated on the ensemble backing ENSEMBLE_DIRS. the
-# guard distance is not a constant: it tracks how densely the extrapolation
-# region has been sampled, and moved outward from 0.038 as the OOD slabs grew
-GUARD_DIST = 0.07    # L-inf box exceedance above this -> refuse
-KN_MAX = 0.01        # continuum floor; above this -> refuse
-WARN_SPREAD = 0.077  # val-split p90 ensemble spread
-REFUSE_SPREAD = 0.25 # in-box backstop, just past the 0.222 max spread seen in eval
+# decision thresholds, calibrated against the ensemble in ENSEMBLE_DIRS. the
+# guard distance is a measurement and not a constant. it marks where held-out
+# error starts to climb, so it moves outward as the extrapolation slabs gain
+# cases, and it needs recalibration whenever they do.
+GUARD_DIST = 0.07    # refuse above this L-inf exceedance of the box
+KN_MAX = 0.01        # refuse above this Knudsen number, the continuum floor
+WARN_SPREAD = 0.077  # the 90th percentile of ensemble spread on the validation split
+REFUSE_SPREAD = 0.25 # an in-box backstop above the largest spread measured, 0.222
 
 
 # ============================================================================================
@@ -85,7 +88,7 @@ def load_ensemble(device: str = "cpu") -> Ensemble:
 
 
 # ============================================================================================
-#                                       geometry / meshing
+#                                    geometry and meshing
 # ============================================================================================
 
 def build_params(R_n: float, theta_c_deg: float, mach: float, altitude_km: float) -> dict[str, float]:
@@ -100,7 +103,7 @@ def build_params(R_n: float, theta_c_deg: float, mach: float, altitude_km: float
 
 
 def mesh_nodes(params: dict[str, float]) -> np.ndarray:
-    """Live-mesh the geometry at training resolution, return (N, 2) node coords."""
+    """Mesh the geometry at training resolution and return (N, 2) node coordinates."""
     R_n, R_b = params["R_n"], params["R_b"]
     with tempfile.TemporaryDirectory() as td:
         out = Path(td) / "case.su2"
@@ -135,7 +138,7 @@ def _parse_su2_nodes(path: Path) -> np.ndarray:
 def _ensemble_forward(
     ens: Ensemble, coords: np.ndarray, params: dict[str, float], device: str = "cpu",
 ) -> torch.Tensor:
-    """Run every member on the node cloud. Returns denormalized (K, N, 4)."""
+    """Run every member over the node cloud, and return (K, N, 4) in physical units."""
     n = coords.shape[0]
     param_vec = np.array([params[k] for k in CASE_PARAM_ORDER], dtype=np.float64)
     feats = np.concatenate(
@@ -150,11 +153,12 @@ def _ensemble_forward(
 
 
 def _channel_spread(members: torch.Tensor) -> float:
-    """||std over members|| / ||truth-proxy|| per channel, channel-averaged.
+    """The norm of the spread over members, divided by the norm of the mean.
 
-    Matches the ensemble-UQ definition but uses the ensemble mean as the
-    scale (no ground truth at inference), so it is comparable in magnitude
-    to the calibrated thresholds.
+    The ratio is taken per channel and then averaged over channels. The
+    uncertainty study defines it the same way, except that it divides by the
+    true field. No true field exists at inference, so the ensemble mean stands
+    in for it, which keeps the value comparable to the calibrated thresholds.
     """
     mean = members.mean(dim=0)                                   # (N, C)
     std = members.std(dim=0)                                     # (N, C)
@@ -171,13 +175,14 @@ def shock_standoff(coords: np.ndarray, rho: np.ndarray, R_n: float, rho_inf: flo
                    r_band: float = 0.10, n_bins: int = 200, thresh_ratio: float = 3.0) -> float:
     """Standoff distance from the nose to the bow shock along the stagnation line.
 
-    Bins the near-axis strip (``r < r_band R_n``) in x, takes the mean density
-    per bin, and locates the shock as the most upstream bin where density rises
-    past ``thresh_ratio`` times freestream. Strip-binning is used instead of an
-    exact-axis profile because on-axis mesh nodes are too sparse to resolve the
-    thin stagnation shock layer.
+    The function bins the strip near the axis, ``r < r_band R_n``, along x and
+    takes the mean density in each bin. The shock is the most upstream bin whose
+    density passes ``thresh_ratio`` times the freestream value. A strip rather
+    than the axis itself, because the mesh carries too few nodes on the axis to
+    resolve the thin shock layer at the stagnation point.
 
-    Returns the distance in metres, or ``nan`` if the strip is too sparse.
+    Returns the distance in metres, or ``nan`` when the strip holds too few
+    nodes.
     """
     mask = coords[:, 1] < r_band * R_n
     xs, rs = coords[mask, 0], rho[mask]
@@ -199,8 +204,8 @@ def shock_standoff(coords: np.ndarray, rho: np.ndarray, R_n: float, rho_inf: flo
     if i == 0:
         x_shock = centers[0]
     else:
-        # linear sub-bin interpolation of the threshold crossing, so the
-        # per-member standoff is continuous rather than quantized to a bin
+        # interpolate the crossing inside the bin, so that the standoff of one
+        # member varies continuously rather than in steps of one bin width
         p0, p1 = prof[i - 1], prof[i]
         frac = (thresh - p0) / (p1 - p0) if p1 != p0 else 1.0
         x_shock = centers[i - 1] + frac * (centers[i] - centers[i - 1])
@@ -212,7 +217,11 @@ def shock_standoff(coords: np.ndarray, rho: np.ndarray, R_n: float, rho_inf: flo
 # ============================================================================================
 
 def envelope_distance(params: dict[str, float], envelope: dict[str, list[float]]) -> float:
-    """L-inf normalized box-exceedance of the case over the train envelope."""
+    """How far the case falls outside the training envelope.
+
+    Each parameter is measured in units of its own box width, and the result is
+    the largest of those. A case inside the box returns 0.
+    """
     d = 0.0
     for k in CASE_PARAM_ORDER:
         lo, hi = envelope[k]
@@ -224,7 +233,7 @@ def envelope_distance(params: dict[str, float], envelope: dict[str, list[float]]
 
 
 def decide(distance: float, kn: float, spread: float) -> str:
-    """trust / warn / refuse from the envelope guard and ensemble spread."""
+    """Decide to trust, warn or refuse, from the envelope guard and the spread."""
     if distance > GUARD_DIST or kn > KN_MAX or spread >= REFUSE_SPREAD:
         return "refuse"
     if spread >= WARN_SPREAD:
@@ -251,7 +260,7 @@ class Prediction:
 
 def predict(ens: Ensemble, R_n: float, theta_c_deg: float, mach: float,
             altitude_km: float, device: str = "cpu") -> Prediction:
-    """End-to-end: sliders -> mesh -> ensemble fields, QoIs, and decision."""
+    """Run the whole chain: controls, mesh, ensemble fields, quantities, decision."""
     params = build_params(R_n, theta_c_deg, mach, altitude_km)
     coords = mesh_nodes(params)
     members = _ensemble_forward(ens, coords, params, device)     # (K, N, 4)
@@ -260,7 +269,8 @@ def predict(ens: Ensemble, R_n: float, theta_c_deg: float, mach: float,
     fields = {name: mean[:, i].cpu().numpy() for i, name in enumerate(TARGET_ORDER)}
     fields["p"] = reconstruct_pressure(mean[:, 0], mean[:, 3]).cpu().numpy()
 
-    # shock standoff is a genuine field-derived QoI: per member -> ensemble band
+    # the standoff comes from the density field itself, so running it per member
+    # gives a real uncertainty band rather than a nominal value
     rho_inf = params["p_inf"] / (R_AIR * params["T_inf"])
     rho_k = members[:, :, 0].cpu().numpy()
     standoffs = np.array([shock_standoff(coords, rho_k[k], R_n, rho_inf)
@@ -270,10 +280,10 @@ def predict(ens: Ensemble, R_n: float, theta_c_deg: float, mach: float,
     distance = envelope_distance(params, ens.envelope)
     kn = knudsen_number(params["mach"], params["T_inf"], params["p_inf"], params["R_n"])
 
-    # stagnation heat flux: the surrogate cannot resolve the thin near-wall
-    # thermal gradient, so the direct field estimate is unreliable (a known
-    # limitation motivating a residual head). Report the Fay-Riddell analytic
-    # value instead, which is exact from freestream and geometry.
+    # stagnation heat flux. the surrogate does not resolve the thin thermal
+    # gradient at the wall, so an estimate read off its temperature field is not
+    # a physical heat flux. report the Fay-Riddell value, which follows from the
+    # freestream and the nose radius alone.
     qoi = {
         "standoff": {
             "mean": float(np.nanmean(standoffs)),

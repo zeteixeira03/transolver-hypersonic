@@ -1,14 +1,15 @@
 """Read SU2 output and extract validation quantities.
 
-- :func:`extract_surface`         read ``surface_flow.vtu`` (or .csv), per-node arrays.
-- :func:`extract_axis_line`       sample the volume VTU along the symmetry axis.
-- :func:`stagnation_values`       stagnation-point pressure, heat flux, wall T.
-- :func:`find_shock_standoff`     bow-shock location along the axis line.
-- :func:`extract_training_tensors` per-node (x, r, rho, u, v, T) arrays from flow.vtu.
+- :func:`extract_surface`         per-node arrays from ``surface_flow.vtu``
+- :func:`extract_axis_line`       the volume solution along the symmetry axis
+- :func:`stagnation_values`       pressure, heat flux and temperature at the wall
+- :func:`find_shock_standoff`     the bow-shock position along the axis line
+- :func:`extract_training_tensors` per-node (x, r, rho, u, v, T) from flow.vtu
 
-SU2 v8 writes minimal surface CSV (conservative variables only). The surface
-VTU carries the full primitive set (pressure, temperature, heat flux, y+),
-so VTU is the canonical surface output for this project.
+SU2 version 8 writes a thin surface .csv file that carries the conserved
+variables alone. The surface .vtu file carries the full set of primitives,
+including pressure, temperature, heat flux and y+. This project therefore reads
+the .vtu file for every surface quantity.
 """
 
 from __future__ import annotations
@@ -37,9 +38,9 @@ _SURFACE_FIELD_ALIASES = {
 def extract_surface(surface_path: str | Path) -> dict[str, np.ndarray]:
     """Parse SU2 surface output and return a dict of per-node arrays.
 
-    Accepts the surface ``.vtu`` (preferred, has full primitive set) or the
-    surface ``.csv`` (limited to whatever columns SU2 chose to write). The
-    function dispatches on file extension.
+    The function reads either the surface ``.vtu`` file, which carries the full
+    set of primitives, or the surface ``.csv`` file, which carries only the
+    columns SU2 chose to write. The file extension selects the reader.
     """
     path = Path(surface_path)
     if path.suffix.lower() == ".vtu":
@@ -48,7 +49,7 @@ def extract_surface(surface_path: str | Path) -> dict[str, np.ndarray]:
 
 
 def _extract_surface_vtu(path: Path) -> dict[str, np.ndarray]:
-    import pyvista as pv  # lazy
+    import pyvista as pv  # imported here because only the readers need it
 
     mesh = pv.read(str(path))
     pts = np.asarray(mesh.points)
@@ -59,7 +60,8 @@ def _extract_surface_vtu(path: Path) -> dict[str, np.ndarray]:
                 arr = np.asarray(mesh.point_data[a])
                 if arr.ndim == 1:
                     out[key] = arr
-                # vector fields are skipped at this layer; pull explicitly if needed
+                # this layer takes scalar fields only. read a vector field
+                # straight from mesh.point_data when one is needed.
                 break
     return out
 
@@ -105,30 +107,29 @@ def stagnation_values(
 ) -> dict[str, float]:
     """Pick stagnation-region values from the surface arrays.
 
-    For axisymmetric blunt bodies, the wall node exactly on the symmetry axis
-    (y == 0) carries a 1/r source-term singularity in the axisymmetric NS
-    discretization. The output pressure and heat flux at that node are
-    inflated and unsuitable for direct comparison with analytical
-    correlations. Skipping the first ``y_axis_skip`` of body radius and
-    averaging over the ``n_average`` smallest-arc wall nodes that survive is
-    the standard practice.
+    On an axisymmetric blunt body the wall node that sits exactly on the
+    symmetry axis carries a 1/r singularity from the source term of the
+    axisymmetric Navier-Stokes discretization. Pressure and heat flux come out
+    inflated at that node, so no analytical correlation matches them. The
+    accepted practice skips a small band of body radius above the axis and then
+    averages the surviving nodes closest to the stagnation point.
 
     Parameters
     ----------
     surface : dict
         From :func:`extract_surface`.
     y_axis_skip : float
-        Skip wall nodes with ``y < y_axis_skip``. Default 0.0 (no skip,
-        legacy behavior). For sphere-cones a typical value is 0.05 R_n.
+        Drop wall nodes with ``y < y_axis_skip``. The default of 0.0 drops
+        nothing. A sphere-cone wants about 0.05 R_n.
     n_average : int
-        Average the surviving wall variables across the ``n_average`` nodes
-        closest to the geometric stagnation point. Default 1 (single node).
+        Average the surviving wall values over this many nodes, taken closest
+        to the geometric stagnation point. The default of 1 takes one node.
 
     Returns
     -------
     dict
-        ``idx`` (representative node index), ``x``, ``y``, and any scalar
-        primitives present in ``surface``.
+        ``idx`` for the representative node index, then ``x``, ``y``, and every
+        scalar primitive that ``surface`` carries.
     """
     x, y = surface["x"], surface["y"]
     mask = y >= y_axis_skip
@@ -162,26 +163,27 @@ def extract_axis_line(
     Parameters
     ----------
     volume_vtu_path : path
-        SU2 volume Paraview output, e.g. ``flow.vtu``.
+        The SU2 volume output in Paraview format, such as ``flow.vtu``.
     x_in : float
-        Upstream end of the sample line (negative if nose is at x=0).
+        Upstream end of the sample line. It is negative when the nose sits at
+        x = 0.
     x_nose : float
-        Downstream end. Defaults to 0 (body stagnation).
+        Downstream end. The default of 0 is the stagnation point of the body.
     n : int
         Number of sample points along the line.
     r_offset : float
-        Small r-offset for the sampling line. Exact axis sampling (r=0) hits
-        the axisymmetric source-term singularity and returns inflated values
-        near the body; a small offset of a few percent of the nose radius
-        avoids this while still being on the stagnation streamline.
+        Offset of the line away from the axis. A line at exactly r = 0 crosses
+        the singularity of the axisymmetric source term and reads inflated
+        values near the body. An offset of a few percent of the nose radius
+        clears the singularity and still lies on the stagnation streamline.
 
     Returns
     -------
     dict
-        Keys: ``x``, ``p``, ``rho``, ``T`` (others when present). Values are
-        (n,) numpy arrays in physical units.
+        Keys ``x``, ``p``, ``rho`` and ``T``, plus any other field the file
+        carries. Every value is an array of shape (n,) in physical units.
     """
-    import pyvista as pv  # lazy: pyvista is only needed at run time
+    import pyvista as pv  # imported here because only the readers need it
 
     mesh = pv.read(str(volume_vtu_path))
     line = pv.Line((x_in, r_offset, 0.0), (x_nose, r_offset, 0.0), resolution=n - 1)
@@ -189,7 +191,7 @@ def extract_axis_line(
     x = np.asarray(sampled.points[:, 0])
 
     out: dict[str, np.ndarray] = {"x": x}
-    # SU2 paraview field names vary slightly across versions
+    # the Paraview field names differ a little between SU2 versions
     aliases = {
         "p":   ("Pressure", "pressure"),
         "rho": ("Density", "density"),
@@ -219,22 +221,23 @@ def find_shock_standoff(
 ) -> dict:
     """Locate the bow shock along an axis-line sample, return standoff distance.
 
-    Three picks are computed:
-    - **midpoint**: first crossing of p > (p_inf + p_post) / 2, where p_post
-      is the median of the high-p plateau between the shock and the body.
-      This is the most robust definition for a smeared shock.
-    - **gradient**: argmax of d p / d x along the line.
-    - **threshold**: first upstream-walking node where p > threshold_factor * p_inf.
+    The function makes three picks:
 
-    The midpoint pick is reported as primary because it is least sensitive
-    to numerical shock smearing.
+    - **midpoint**: the first crossing of p above (p_inf + p_post) / 2, where
+      p_post is the median of the pressure plateau between the shock and the
+      body.
+    - **gradient**: the position of the largest d p / d x along the line.
+    - **threshold**: the first node, walking upstream, where p passes
+      ``threshold_factor * p_inf``.
 
-    Degenerate detections (a pick within ``min_cells_from_body`` grid cells of
-    either endpoint of the sample line) are treated as missing: the field
-    either has no resolvable shock between freestream and the body, or the
-    shock has collapsed onto the wall and the picks have latched onto a few
-    cells from the line endpoint. The returned standoff is NaN in that case
-    and downstream sanity checks see NaN rel error, not a silent constant.
+    The midpoint pick leads, because a numerically smeared shock moves it least.
+
+    A pick that lands within ``min_cells_from_body`` cells of either end of the
+    sample line counts as no pick at all. Two flow states produce that: a field
+    with no shock the mesh can resolve between the freestream and the body, and
+    a shock that has collapsed onto the wall. Both leave the standoff at NaN, so
+    the sanity checks report a NaN relative error rather than a plausible
+    constant.
 
     Parameters
     ----------
@@ -243,19 +246,20 @@ def find_shock_standoff(
     p_inf : float
         Freestream pressure for the threshold and midpoint picks.
     threshold_factor : float
-        Multiplier on p_inf for the leading-edge threshold pick.
+        Multiplier on p_inf for the threshold pick.
     smooth : int
-        Boxcar window for gradient smoothing.
+        Width of the boxcar window applied before the gradient.
     min_cells_from_body : int
-        Minimum number of axis-line cells between a valid pick and either
-        endpoint. Picks within this margin are NaN'd. Default 3.
+        Least number of axis-line cells between a valid pick and either end of
+        the line. A pick inside that margin becomes NaN. Default 3.
 
     Returns
     -------
     dict
-        ``x_shock`` (negative for an upstream shock), ``standoff`` (positive;
-        NaN if no valid pick), per-method picks, ``method`` ("midpoint",
-        "gradient", "threshold", or "none"), and ``valid`` (bool).
+        ``x_shock``, negative for a shock upstream of the nose. ``standoff``,
+        positive, or NaN when no pick is valid. The three picks on their own.
+        ``method``, one of "midpoint", "gradient", "threshold" or "none". And
+        ``valid`` as a boolean.
     """
     x = np.asarray(axis["x"])
     p = np.asarray(axis["p"])
@@ -281,12 +285,12 @@ def find_shock_standoff(
     i_grad = int(np.argmax(dp_dx))
     x_grad = float(x[i_grad])
 
-    # threshold leading-edge pick
+    # threshold pick: the first node above threshold_factor times p_inf
     mask_thr = p > threshold_factor * p_inf
     x_thr = float(x[np.argmax(mask_thr)]) if np.any(mask_thr) else float("nan")
 
-    # midpoint pick: use the median of the shock-layer plateau as p_post
-    # (everything downstream of the gradient maximum)
+    # midpoint pick. p_post is the median of the shock-layer plateau, which is
+    # everything downstream of the largest gradient
     if 1 < i_grad < len(x) - 2:
         p_post = float(np.median(p_smooth[i_grad:]))
         p_mid = 0.5 * (p_inf + p_post)
@@ -296,10 +300,11 @@ def find_shock_standoff(
         p_post = float("nan")
         x_mid = float("nan")
 
-    # midpoint preferred; fall back to gradient, then threshold. each pick
-    # must lie at least min_cells_from_body cells inside the sample line, so
-    # a collapsed shock (pick at the body end) or a missed shock (pick at
-    # the freestream end) returns NaN instead of a near-endpoint artifact
+    # take the midpoint pick, then the gradient pick, then the threshold pick.
+    # each one must sit at least min_cells_from_body cells inside the sample
+    # line. a shock collapsed onto the body picks at one end and a shock the
+    # mesh never resolved picks at the other, and both return NaN rather than
+    # a value that looks physical
     x_shock: float = float("nan")
     method = "none"
     for cand, name in ((x_mid, "midpoint"), (x_grad, "gradient"), (x_thr, "threshold")):
@@ -333,30 +338,31 @@ def extract_training_tensors(
 ) -> dict[str, np.ndarray]:
     """Extract per-mesh-node training arrays from a converged SU2 case.
 
-    Returns the 4 primitives Transolver will be trained to predict
-    ((rho, u, v, T)), plus node coordinates (x, r). Pressure is omitted; it
-    is reconstructed at inference time as ``p = rho * R_specific * T``, so
-    the equation of state holds exactly at the model output.
+    Returns the four primitives the model predicts, (rho, u, v, T), with the
+    node coordinates (x, r). Pressure is absent on purpose. It is reconstructed
+    at inference as ``p = rho * R_specific * T``, which holds the equation of
+    state exactly at the output of the model.
 
     Parameters
     ----------
     volume_vtu_path : path
         Converged SU2 ``flow.vtu`` for one case.
     case : Case, optional
-        If provided, the 8 case parameters are saved alongside the field
-        arrays as ``case_params`` (channel order in
-        :data:`src.data.su2.CASE_PARAM_ORDER`). This makes the .npz
-        self-describing for downstream model training.
+        When given, the eight case parameters are written beside the field
+        arrays as ``case_params``, in the channel order of
+        :data:`src.data.su2.CASE_PARAM_ORDER`. The .npz file then describes
+        itself and training needs no separate manifest.
     save_npz : path, optional
-        If provided, save the dict as a compressed .npz alongside the VTU.
+        When given, write the result as a compressed .npz file at this path.
 
     Returns
     -------
     dict
-        Keys ``x``, ``r``, ``rho``, ``u``, ``v``, ``T`` (all 1-D arrays),
-        and ``case_params`` (shape (8,)) when ``case`` is provided.
+        Keys ``x``, ``r``, ``rho``, ``u``, ``v`` and ``T``, each a
+        one-dimensional array, plus ``case_params`` of shape (8,) when ``case``
+        is given.
     """
-    import pyvista as pv  # lazy
+    import pyvista as pv  # imported here because only the readers need it
 
     mesh = pv.read(str(volume_vtu_path))
     pts = np.asarray(mesh.points)
@@ -367,7 +373,7 @@ def extract_training_tensors(
         raise ValueError(f"flow.vtu at {volume_vtu_path} missing Density")
     rho = np.asarray(mesh.point_data["Density"])
 
-    # velocity from Velocity vector (preferred) or Momentum / Density
+    # velocity comes from the Velocity vector, or from Momentum over Density
     if "Velocity" in mesh.point_data:
         vel = np.asarray(mesh.point_data["Velocity"])
         u, v = vel[:, 0], vel[:, 1]

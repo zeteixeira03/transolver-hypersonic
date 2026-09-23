@@ -1,19 +1,26 @@
 """Analytical correlations for hypersonic blunt-body validation.
 
-Three sanity checks against SU2 axisymmetric laminar Navier-Stokes for the
-stagnation region of a sphere-cone:
+Three closed-form checks on the stagnation region of a sphere-cone. Each one
+covers a different SU2 output, so together they catch an error anywhere in the
+axisymmetric laminar Navier-Stokes pipeline.
 
-- :func:`fay_riddell_qw`     stagnation-point heat flux (laminar, equilibrium BL)
-- :func:`rayleigh_pitot_p02` post-normal-shock stagnation pressure (calorically perfect)
-- :func:`billig_standoff`    bow-shock standoff distance correlation
+- :func:`fay_riddell_qw`     stagnation-point heat flux, laminar boundary layer
+- :func:`rayleigh_pitot_p02` stagnation pressure behind the normal shock
+- :func:`billig_standoff`    standoff distance of the bow shock
+
+Every correlation assumes a calorically perfect gas, which matches the solver
+setup this project uses.
 
 References
 ----------
-Anderson, J. D., "Hypersonic and High-Temperature Gas Dynamics", 2nd ed., AIAA, 2006.
+Anderson, J. D., "Hypersonic and High-Temperature Gas Dynamics", 2nd edition,
+    AIAA, 2006.
 Fay, J. A. and Riddell, F. R., "Theory of Stagnation Point Heat Transfer in
-    Dissociated Air", J. Aero. Sci., Vol. 25, No. 2, 1958, pp. 73-85.
+    Dissociated Air", Journal of the Aeronautical Sciences, Volume 25,
+    Number 2, 1958, pages 73-85.
 Billig, F. S., "Shock-Wave Shapes Around Spherical- and Cylindrical-Nosed
-    Bodies", J. Spacecraft, Vol. 4, No. 6, 1967, pp. 822-823.
+    Bodies", Journal of Spacecraft and Rockets, Volume 4, Number 6, 1967,
+    pages 822-823.
 NACA Report 1135, "Equations, Tables, and Charts for Compressible Flow", 1953.
 """
 
@@ -31,7 +38,7 @@ GAMMA_AIR = 1.4         # ratio of specific heats, calorically perfect
 CP_AIR = 1004.5         # J/(kg K), specific heat at constant pressure
 PR_AIR = 0.71           # Prandtl number, cold-wall laminar boundary layer
 
-# Sutherland's law for air viscosity (SI)
+# Sutherland's law for the viscosity of air
 MU_REF = 1.716e-5       # Pa s, reference viscosity at T_REF
 T_REF = 273.15          # K
 S_SUTH = 110.4          # K, Sutherland constant
@@ -56,12 +63,12 @@ def sutherland_mu(T: float) -> float:
 def knudsen_number(M_inf: float, T_inf: float, p_inf: float, R_n: float) -> float:
     """Freestream Knudsen number on the nose radius, Kn = 1.26 sqrt(gamma) M / Re_n.
 
-    Re_n is the nose-radius Reynolds number rho_inf V_inf R_n / mu(T_inf). The
-    continuum no-slip Navier-Stokes model the dataset assumes is valid only for
-    Kn below ~0.01; above that the wall develops velocity slip and a temperature
-    jump the solver does not represent, and the bow shock and boundary layer
-    merge into a thick viscous layer the inviscid Fay-Riddell and Billig
-    correlations no longer describe.
+    Re_n is the Reynolds number on the nose radius, rho_inf V_inf R_n / mu(T_inf).
+    The solver treats air as a continuum and holds the no-slip condition at the
+    wall. That model needs a Knudsen number below about 0.01. Above it the wall
+    takes on a velocity slip and a temperature jump that the solver cannot
+    represent. The bow shock and the boundary layer also merge into one thick
+    viscous layer, which neither Fay-Riddell nor Billig describes.
 
     Parameters
     ----------
@@ -90,9 +97,10 @@ def knudsen_number(M_inf: float, T_inf: float, p_inf: float, R_n: float) -> floa
 def rayleigh_pitot_p02(M_inf: float, p_inf: float, gamma: float = GAMMA_AIR) -> float:
     """Post-normal-shock stagnation pressure from supersonic freestream.
 
-    Combines the normal-shock static-pressure jump with isentropic compression
-    of the subsonic post-shock flow to rest. Calorically perfect gas; this is
-    the canonical "Pitot pressure" expression in NACA 1135 (Eq. 100).
+    The expression joins the static-pressure jump across a normal shock to the
+    isentropic compression that brings the subsonic flow behind it to rest. The
+    gas is calorically perfect. NACA Report 1135 gives it as Equation 100 and
+    calls the result the Pitot pressure.
 
     Parameters
     ----------
@@ -124,8 +132,9 @@ def rayleigh_pitot_p02(M_inf: float, p_inf: float, gamma: float = GAMMA_AIR) -> 
 def billig_standoff(M_inf: float, R_n: float) -> float:
     """Bow-shock standoff distance ahead of a spherical nose.
 
-    Empirical fit by Billig (1967), reproduced as Anderson Hypersonic Eq. 5.32.
-    Valid for M_inf >= 2 roughly; asymptotes correctly as M_inf grows.
+    An empirical fit by Billig (1967), reproduced as Equation 5.32 in Anderson.
+    It holds above about Mach 2 and approaches the correct limit at high Mach
+    number.
 
     Parameters
     ----------
@@ -158,10 +167,11 @@ def fay_riddell_qw(
 ) -> float:
     """Stagnation-point heat flux to a cold wall, laminar equilibrium boundary layer.
 
-    Fay-Riddell (1958) with Lewis number set to unity (no dissociation source
-    term, consistent with the ideal-gas calorically perfect SU2 setup used in
-    this project). The stagnation velocity gradient uses the modified-Newtonian
-    form ``(du_e/dx)_s = (1/R_n) sqrt(2 (p_02 - p_inf) / rho_02)``.
+    Fay-Riddell (1958) with the Lewis number set to unity, which drops the
+    dissociation source term. That matches the solver, which models air as a
+    calorically perfect ideal gas. The velocity gradient at the stagnation point
+    takes the modified Newtonian form
+    ``(du_e/dx)_s = (1/R_n) sqrt(2 (p_02 - p_inf) / rho_02)``.
 
     Parameters
     ----------
@@ -187,14 +197,16 @@ def fay_riddell_qw(
         raise ValueError("fay_riddell_qw requires supersonic freestream M_inf > 1")
     g = gamma
 
-    # post-normal-shock stagnation conditions (boundary-layer edge state at stagnation point)
+    # stagnation conditions behind the normal shock, which are also the state at
+    # the edge of the boundary layer on the stagnation streamline
     p_02 = rayleigh_pitot_p02(M_inf, p_inf, gamma=g)
     # stagnation temperature is freestream total temperature, conserved across the shock
     T_0 = T_inf * (1.0 + 0.5 * (g - 1.0) * M_inf * M_inf)
     rho_02 = p_02 / (R_AIR * T_0)
     mu_e = sutherland_mu(T_0)
 
-    # wall state: same pressure as boundary-layer edge at stagnation (thin BL), wall temperature
+    # wall state. the boundary layer is thin, so the wall pressure equals the
+    # edge pressure; the temperature is the isothermal wall value
     rho_w = p_02 / (R_AIR * T_w)
     mu_w = sutherland_mu(T_w)
 

@@ -53,8 +53,8 @@ def test_atmosphere_rejects_out_of_range():
 def test_sample_cases_count_and_determinism():
     a = sample_cases(n_geom=8, n_fs=3, n_geom_ood=2, n_fs_ood=1, seed=1)
     b = sample_cases(n_geom=8, n_fs=3, n_geom_ood=2, n_fs_ood=1, seed=1)
-    # the Kn <= KN_MAX filter drops rarefied draws, so the count is bounded
-    # above by the nominal DOE size but need not reach it
+    # the Knudsen filter drops any draw in the rarefied regime, so the count
+    # cannot pass the nominal sample size and need not reach it
     nominal = 8 * 3 + len(OOD_SLABS) * 2 * 1
     assert 0 < len(a) <= nominal
     assert len(a) == len(b)
@@ -200,7 +200,8 @@ def test_reclaim_stale(tmp_path):
     cid, _, _ = L.claim_next(db, "worker_a")
     # nothing is stale with a long lease
     assert L.reclaim_stale(db, max_age_s=1e9) == 0
-    # a zero lease reclaims the running row back to pending (attempts 1 < MAX_ATTEMPTS)
+    # a lease of zero returns the running row to pending, since 1 attempt is
+    # still under MAX_ATTEMPTS
     assert L.reclaim_stale(db, max_age_s=0.0) == 1
     assert L.status_counts(db) == {"pending": 1}
     # burn the rest of the budget; every claim costs one attempt

@@ -1,27 +1,31 @@
-"""Deep-ensemble UQ: spread calibration and the trust/warn/refuse rule.
+"""Deep-ensemble uncertainty: spread calibration and the decision rule.
 
-Consumes K sibling run dirs from ``scripts/train.py`` trained
-with the same ``--seed`` and slice count but different ``--init-seed``
-(the init-seed-0 run at the chosen M counts as one member). Two stages:
+The script reads K run directories written by ``scripts/train.py``. Every member
+must share a ``--seed`` and a slice count and differ only in ``--init-seed``. The
+run at ``--init-seed 0`` counts as one member. The work happens in two stages.
 
-1. Inference: rebuilds the shared splits, runs every member on every
-   eval-tier case (val included, it calibrates the thresholds) and writes
-   ``ensemble_per_case.json``: per-channel rel-L2 of the ensemble-mean
-   prediction, per-channel ensemble spread, per-member rel-L2, envelope
-   distance and Knudsen number. Spread is ``||std over members|| / ||truth||``
-   per channel, the same units as rel-L2, so the two are directly
-   comparable. GPU helps but the 0.5M-param model makes CPU viable.
-2. Analysis (fast, rerunnable from the JSON via ``--per-case``): the
-   ensemble-vs-single-member table, spread-vs-error calibration (Spearman
-   rank correlation per tier plus a binned-median figure), and the
-   trust/warn/refuse decision table.
+Stage one is inference. It rebuilds the shared splits, runs every member over
+every case in every evaluation tier, and writes ``ensemble_per_case.json``. That
+file holds, per case, the relative L2 of the ensemble mean per channel, the
+ensemble spread per channel, the relative L2 of each member, the envelope
+distance, and the Knudsen number. The validation split is included here, because
+it calibrates the thresholds. Spread is ``||std over members|| / ||truth||`` per
+channel, which puts it in the same units as the relative L2 and makes the two
+directly comparable. A graphics card speeds this up, and the model is small
+enough at half a million parameters that a processor also finishes it.
 
-Decision rule: refuse when the input fails the envelope guard
-(distance > ``--guard-dist`` or Kn > 0.01) or spread exceeds the refuse
-threshold; warn when spread exceeds the warn threshold; trust otherwise.
-Default thresholds derive from the val-split spread distribution (p90 and
-4x p90) and are printed; override with ``--warn-spread`` /
-``--refuse-spread`` after inspecting the calibration figure.
+Stage two is analysis. It is fast and it runs again from the JSON file alone
+through ``--per-case``. It produces the table that compares the ensemble against
+a single member, the calibration of spread against error as a Spearman rank
+correlation per tier and a figure of binned medians, and the decision table.
+
+The decision rule refuses an input when the envelope guard fails, meaning a
+distance past ``--guard-dist`` or a Knudsen number above 0.01, and also when the
+spread passes the refuse threshold. It warns when the spread passes the warn
+threshold, and trusts otherwise. The default thresholds come from the spread
+distribution on the validation split, at its 90th percentile and four times
+that, and the script prints both. Look at the calibration figure first, then
+override them with ``--warn-spread`` and ``--refuse-spread``.
 
 Usage
 -----
@@ -83,7 +87,7 @@ EVAL_SPLITS = ("val", "test", "test_interp", *(f"ood_{g}" for g in OOD_GROUPS))
 # ============================================================================================
 
 def load_member(run_dir: Path, device: str) -> Transolver:
-    """Instantiate from the recorded run args and load best.pt."""
+    """Build one member from its recorded arguments and load ``best.pt``."""
     rec = json.loads((run_dir / "final_eval.json").read_text())["args"]
     model = Transolver(
         space_dim=POS_DIM, fun_dim=N_CASE_PARAMS, out_dim=TARGET_DIM,
@@ -97,7 +101,10 @@ def load_member(run_dir: Path, device: str) -> Transolver:
 @torch.no_grad()
 def run_inference(run_dirs: list[Path], workdir: Path, device: str,
                   pinned_splits: Path | None = None) -> list[dict]:
-    """Per-case ensemble records over every eval split (val included)."""
+    """Build the per-case ensemble record for every evaluation split.
+
+    The validation split is included, because it calibrates the thresholds.
+    """
     finals = [json.loads((d / "final_eval.json").read_text()) for d in run_dirs]
     args0 = finals[0]["args"]
     for f, d in zip(finals[1:], run_dirs[1:]):
@@ -172,14 +179,17 @@ def chan_mean(d: dict[str, float]) -> float:
 
 
 def tiers_present(recs: list[dict]) -> list[str]:
-    """Eval tiers in report order; val is calibration-only and excluded."""
+    """Evaluation tiers in report order. The validation split is left out.
+
+    That split only calibrates the thresholds and is not a tier.
+    """
     order = [s for s in EVAL_SPLITS if s != "val"]
     present = {r["split"] for r in recs}
     return [s for s in order if s in present]
 
 
 def tier_label(split: str) -> str:
-    return TIER_LABELS.get(split, split.removeprefix("ood_") + " (OOD)")
+    return TIER_LABELS.get(split, split.removeprefix("ood_") + " (extrapolation)")
 
 
 # ============================================================================================
@@ -187,7 +197,7 @@ def tier_label(split: str) -> str:
 # ============================================================================================
 
 def ensemble_table(recs: list[dict]) -> str:
-    """Markdown: ensemble-mean vs single-member accuracy and spread per tier."""
+    """Render the accuracy of the ensemble against one member, per tier, as Markdown."""
     n_members = len(recs[0]["rL2_members"])
     lines = ["| tier | n | ensemble | member mean | best member | spread |",
              "|" + "---|" * 6]
@@ -204,7 +214,10 @@ def ensemble_table(recs: list[dict]) -> str:
 
 
 def calibration_stats(recs: list[dict]) -> str:
-    """Markdown: Spearman(spread, error) per tier and pooled over eval tiers."""
+    """Render the Spearman correlation of spread against error, as Markdown.
+
+    One row per tier, then one pooled row over every tier.
+    """
     lines = ["| tier | n | spearman |", "|---|---|---|"]
     pooled_s, pooled_e = [], []
     for split in tiers_present(recs):
@@ -222,7 +235,10 @@ def calibration_stats(recs: list[dict]) -> str:
 
 def decision_table(recs: list[dict], warn: float, refuse: float,
                    guard_dist: float) -> str:
-    """Markdown: actual-error stats per trust/warn/refuse bucket (eval tiers)."""
+    """Render the measured error inside each decision bucket, as Markdown.
+
+    The validation split is excluded, so the rows cover the tiers alone.
+    """
 
     def decide(r: dict) -> str:
         if r["kn"] > KN_MAX or r["dist"] > guard_dist:
@@ -253,7 +269,10 @@ def decision_table(recs: list[dict], warn: float, refuse: float,
 
 def calibration_figure(recs: list[dict], fig_out: Path,
                        warn: float, refuse: float) -> None:
-    """Per-case error vs ensemble spread, log-log, with the binned median."""
+    """Plot the error of each case against its ensemble spread.
+
+    Both axes are logarithmic, and a binned median runs through the cloud.
+    """
     fig, ax = plt.subplots(figsize=(7, 4.5))
     for split in tiers_present(recs):
         rows = [r for r in recs if r["split"] == split]
@@ -292,32 +311,37 @@ def calibration_figure(recs: list[dict], fig_out: Path,
 # ============================================================================================
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="deep-ensemble UQ + trust/warn/refuse")
+    p = argparse.ArgumentParser(
+        description="deep-ensemble uncertainty and the trust/warn/refuse rule")
     p.add_argument("runs", nargs="*",
-                   help="member run dirs (same --seed and M, different --init-seed)")
+                   help="member run directories; same --seed and M, "
+                        "different --init-seed")
     p.add_argument("--workdir", default="data/raw/kaggle_su2_stage",
-                   help="dataset workdir with case npzs and ledger.db")
+                   help="dataset directory holding the case tensors and ledger.db")
     p.add_argument("--out", default="data/processed/ensemble")
     p.add_argument("--per-case", default=None, metavar="JSON",
                    help="skip inference; analyze an existing ensemble_per_case.json")
     p.add_argument("--guard-dist", type=float, default=0.07,
                    help="envelope guard threshold on box exceedance")
     p.add_argument("--warn-spread", type=float, default=None,
-                   help="spread above which the decision is warn (default: val p90)")
+                   help="spread above which the decision is warn; the default is "
+                        "the 90th percentile on the validation split")
     p.add_argument("--refuse-spread", type=float, default=None,
-                   help="spread above which the decision is refuse (default: 4x warn)")
+                   help="spread above which the decision is refuse; the default is "
+                        "four times the warn threshold")
     p.add_argument("--fig-out", default="data/samples/spread_calibration.png")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--pinned-splits", default=None, metavar="JSON",
-                   help="reuse pinned split membership from a prior run to keep "
-                        "core val/test/interp comparable across dataset versions")
+                   help="take the split membership from an earlier run, so that the "
+                        "validation, test and interpolation tiers hold the same "
+                        "cases across dataset versions")
     args = p.parse_args()
 
     if args.per_case is not None:
         recs = json.loads(Path(args.per_case).read_text())
     else:
         if len(args.runs) < 2:
-            raise SystemExit("need at least 2 run dirs (or --per-case JSON)")
+            raise SystemExit("need at least 2 run directories, or a --per-case file")
         recs = run_inference([Path(d).resolve() for d in args.runs],
                              Path(args.workdir).resolve(), args.device,
                              pinned_splits=args.pinned_splits)
@@ -334,7 +358,7 @@ def main() -> None:
     print(f"\nthresholds: warn spread {warn:.4f}, refuse spread {refuse:.4f}, "
           f"guard d > {args.guard_dist}, Kn > {KN_MAX}")
 
-    print("\n## Ensemble vs single members (mean rel-L2 per tier)\n")
+    print("\n## Ensemble against single members (mean relative L2 per tier)\n")
     print(ensemble_table(recs))
     print("\n## Spread-error calibration (Spearman rank corr per tier)\n")
     print(calibration_stats(recs))

@@ -1,10 +1,13 @@
 """Unit tests for analytical hypersonic correlations.
 
-Reference values:
-- Rayleigh-Pitot ratios from NACA Report 1135 Table II (gamma=1.4).
-- Billig standoff: closed-form, checked against Anderson Hypersonic Eq. 5.32.
-- Fay-Riddell: self-consistent regression at a representative reentry point
-  computed by hand against the same formula, plus monotonicity sanity checks.
+Where the reference values come from:
+
+- The Rayleigh-Pitot ratios are Table II of NACA Report 1135, at gamma = 1.4.
+- The Billig standoff is closed form and is checked against Equation 5.32 in
+  Anderson.
+- The Fay-Riddell value is computed by hand from the same formula at one
+  representative re-entry point, and the tests around it check that the trends
+  run the right way.
 """
 
 from __future__ import annotations
@@ -103,12 +106,12 @@ def test_fay_riddell_reentry_regression():
     PR_AIR, MU_REF, S_SUTH), update this expected value.
     """
     q_w = fay_riddell_qw(M_inf=10.0, T_inf=220.0, p_inf=100.0, R_n=0.5, T_w=300.0)
-    assert q_w == pytest.approx(2.5e5, rel=0.10)  # +/- 10% on the hand calc
+    assert q_w == pytest.approx(2.5e5, rel=0.10)  # within 10% of the value computed by hand
 
 
 def test_fay_riddell_magnitude_band():
-    # hypersonic wall heat flux peaks at O(1-100) MW/m^2.
-    # Spot-check a more aggressive case sits inside that band.
+    # a hypersonic wall heat flux peaks between 1 and 100 MW/m^2. check that a
+    # more severe case still lands inside that band.
     q_w = fay_riddell_qw(M_inf=20.0, T_inf=250.0, p_inf=50.0, R_n=0.3, T_w=300.0)
     assert 1e5 < q_w < 1e8
 
@@ -118,7 +121,7 @@ def test_fay_riddell_decreases_with_nose_radius():
     q_small = fay_riddell_qw(10.0, 220.0, 100.0, 0.1, 300.0)
     q_large = fay_riddell_qw(10.0, 220.0, 100.0, 1.0, 300.0)
     assert q_small > q_large
-    # ratio should be roughly sqrt(10) = 3.16
+    # the ratio must land near sqrt(10) = 3.16
     assert q_small / q_large == pytest.approx(math.sqrt(10.0), rel=0.05)
 
 
@@ -188,7 +191,7 @@ def test_standoff_cutoff_is_inclusive():
 
 
 def test_standoff_gated_when_theta_c_unknown():
-    # back-compat: callers that pass no theta_c gate the standoff unconditionally
+    # a caller that passes no cone angle gates the standoff at every angle
     s = _summary_with_bad_standoff(None)
     assert _standoff_check(s).applicable is True
     assert s["all_passed"] is False

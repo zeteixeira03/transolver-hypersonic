@@ -1,9 +1,10 @@
 """
-Training and evaluation loop, first exercised on AirfRANS.
+Training and evaluation loop, written against AirfRANS first.
 
-Loss matches the upstream Transolver/AirfRANS recipe: MSE on volume points
-plus a configurable weight on MSE over surface points. Default weight 1.0
-mirrors thuml/Transolver's `--weight 1` setting.
+The loss follows the recipe the Transolver authors use on AirfRANS. It is the
+mean squared error over volume points plus a weighted mean squared error over
+surface points. The default weight of 1.0 matches the ``--weight 1`` setting of
+thuml/Transolver.
 """
 
 from __future__ import annotations
@@ -30,8 +31,8 @@ class TrainConfig:
     device: str = "cuda"
     log_every: int = 1
     val_every: int = 10
-    amp: bool = True  # mixed-precision on CUDA
-    grad_clip: float = 1.0  # global L2 grad-norm clip, disables if <= 0
+    amp: bool = True        # mixed precision, on a CUDA device only
+    grad_clip: float = 1.0  # global L2 gradient-norm clip; 0 or less turns it off
 
 
 # ============================================================================================
@@ -44,7 +45,9 @@ def mse_weighted(
     surface_weight: float,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
-    Volume MSE plus surface_weight * surface MSE, computed point-wise.
+    The volume mean squared error plus ``surface_weight`` times the surface one.
+
+    Both terms are computed over points.
 
     pred, target : (B, N, C)
     surface      : (B, N) boolean
@@ -60,10 +63,13 @@ def mse_weighted(
 
 
 # ============================================================================================
-#                                       collate (single-sample batches)
+#                                   collate one sample per batch
 # ============================================================================================
 def collate_single(batch: list[dict]) -> dict:
-    """Collate for batch_size=1; just promote to (1, N, C)."""
+    """Collate one item into a batch by adding the leading axis, to (1, N, C).
+
+    A batch holds one mesh, because the node count differs from mesh to mesh.
+    """
     if len(batch) != 1:
         raise NotImplementedError("batch_size must be 1; meshes have variable N.")
     item = batch[0]
@@ -100,7 +106,8 @@ def train_one_epoch(
         optimizer.zero_grad()
         with torch.cuda.amp.autocast(enabled=use_amp):
             pred = model(x, pos=pos)
-        # loss in fp32 regardless of AMP, MSE on normalized targets is cheap
+        # the loss runs in float32 even under mixed precision. a mean squared
+        # error over normalized targets costs little and stays well conditioned.
         loss, loss_vol, loss_surf = mse_weighted(
             pred.float(), y.float(), surface, cfg.surface_weight
         )
@@ -159,13 +166,14 @@ def evaluate(
     device: str,
 ) -> dict[str, float]:
     """
-    Evaluate on each held-out simulation at full resolution (no subsampling).
-    Reports per-channel relative L2 in physical units.
+    Evaluate every held-out simulation at full mesh resolution.
 
-    Relative L2 per channel c on simulation s:
-        rL2_c(s) = || y_pred_c - y_true_c ||_2 / || y_true_c ||_2
+    The metric is the relative L2 per channel, in physical units. For channel c
+    on simulation s it is
 
-    Returns the mean over simulations.
+        || y_pred_c - y_true_c ||_2 / || y_true_c ||_2
+
+    The return value is the mean over simulations.
     """
     model.eval()
     saved_subsample = dataset.subsample
@@ -187,9 +195,10 @@ def evaluate(
             den = y_true.pow(2).sum(dim=0).sqrt().clamp_min(1e-12)
             per_sim.append((num / den).cpu())
 
-            # surface metric is only meaningful for pressure (channel 2);
-            # u, v are ~0 by no-slip and nu_t is ~0 on the wall, so dividing
-            # by tiny norms blows up the relative-L2 figure
+            # only pressure, channel 2, carries a usable surface metric. the
+            # no-slip condition holds both velocity components near zero at the
+            # wall and the turbulent viscosity is near zero there too, so the
+            # relative error would divide by an almost empty norm
             if surface.any():
                 p_pred_s = pred[surface, 2]
                 p_true_s = y_true[surface, 2]

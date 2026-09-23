@@ -1,20 +1,20 @@
 """Compare SU2 single-case output against analytical hypersonic correlations.
 
-The three acceptance gates:
+Three acceptance gates, each with its own tolerance:
 
-- Stagnation heat flux vs Fay-Riddell:       expect agreement within ~15%
-- Stagnation pressure vs Rayleigh-Pitot:     expect agreement within ~5%
-- Bow-shock standoff vs Billig:              expect agreement within ~20%
+- stagnation heat flux against Fay-Riddell, within about 15%
+- stagnation pressure against Rayleigh-Pitot, within about 5%
+- bow-shock standoff against Billig, within about 20%
 
-The standoff gate carries a validity domain. Billig is a sphere-nose fit with no
-cone-angle term; for blunt sphere-cones (large theta_c) the body is far blunter
-than a sphere of radius R_n and the shock genuinely stands off much farther than
-the correlation predicts. Above :data:`THETA_C_BILLIG_MAX` the standoff check is
-marked not-applicable: the SU2 value and the (invalid) Billig value are still
-reported, but the check is excluded from the pass/fail decision.
+The standoff gate holds over part of the design box and not all of it. Billig
+fits a spherical nose and carries no term for the cone angle. A blunt
+sphere-cone presents a much wider frontal shape than a sphere of radius R_n, so
+its shock stands off farther than the correlation predicts, and the difference
+is physical rather than an error. Above :data:`THETA_C_BILLIG_MAX` the standoff
+check reports both values and takes no part in the decision to pass or fail.
 
-:func:`compare_to_analytical` returns a structured summary that the validation
-script renders to console and persists to JSON alongside the run artifacts.
+:func:`compare_to_analytical` returns a summary that the validation script
+prints to the console and also writes to JSON beside the other run files.
 """
 
 from __future__ import annotations
@@ -40,13 +40,14 @@ from src.analytical import (
 TOL_QW   = 0.15  # Fay-Riddell
 TOL_P02  = 0.05  # Rayleigh-Pitot
 TOL_DELTA = 0.20  # Billig
-TOL_DELTA_HIGH_MACH = 0.50  # Billig correlation under-predicts at high Mach
-M_HIGH = 22.0              # threshold above which the wider Billig tol applies
-# Billig is a sphere-nose standoff fit (no cone-angle term). For sphere-cones
-# blunter than this half-angle the body presents a much wider frontal shape than
-# a sphere of radius R_n, the shock stands off ~2.3x farther, and Billig is no
-# longer a valid yardstick (CFD/Billig tracks theta_c with corr 0.78; clean
-# below 60 deg, ~2.3x above). Standoff is reported but not gated past this.
+TOL_DELTA_HIGH_MACH = 0.50  # Billig reads low at high Mach number
+M_HIGH = 22.0               # above this Mach number the wider tolerance applies
+# Billig fits the standoff of a spherical nose and carries no cone-angle term.
+# a sphere-cone blunter than this half-angle presents a far wider frontal shape
+# than a sphere of radius R_n, and its shock stands off about 2.3 times farther.
+# the ratio of the solver value to the Billig value tracks the cone angle with a
+# correlation of 0.78: close to one below 60 degrees, about 2.3 above it. past
+# this angle the standoff is reported and not gated.
 THETA_C_BILLIG_MAX = 60.0  # deg
 
 
@@ -68,8 +69,8 @@ class Check:
 
     @property
     def passed(self) -> bool:
-        # a check outside its validity domain never fails the case; the rel
-        # error is still computed and reported, just not gated
+        # a check outside its validity domain never fails the case. the
+        # relative error is still computed and reported.
         if not self.applicable:
             return True
         return abs(self.rel_err) <= self.tolerance
@@ -87,30 +88,31 @@ def compare_to_analytical(
     su2_standoff: float,
     theta_c_deg: float | None = None,
 ) -> dict:
-    """Compare three SU2 stagnation/shock quantities against analytical refs.
+    """Compare three stagnation and shock quantities against the correlations.
 
     Parameters
     ----------
     M_inf, T_inf, p_inf, R_n, T_w : float
-        Case parameters (freestream + nose radius + wall T).
+        Freestream conditions, the nose radius, and the wall temperature.
     su2_qw : float
-        SU2 stagnation wall heat flux, W/m^2. Sign convention: positive into
-        the wall (the analytical Fay-Riddell value is the magnitude).
+        Stagnation wall heat flux from SU2, W/m^2, positive into the wall. The
+        Fay-Riddell value it meets is a magnitude.
     su2_p02 : float
-        SU2 stagnation pressure (peak wall pressure), Pa.
+        Stagnation pressure from SU2, which is the peak wall pressure, Pa.
     su2_standoff : float
-        SU2 bow-shock standoff distance from the nose along r = 0, m.
+        Standoff distance from the nose to the bow shock along r = 0, m.
     theta_c_deg : float, optional
-        Cone half-angle in degrees. Gates the standoff check: above
-        :data:`THETA_C_BILLIG_MAX` the sphere-Billig reference does not apply
-        and the standoff check is marked not-applicable (reported, not gated).
-        When None the standoff check is gated unconditionally (back-compat).
+        Cone half-angle in degrees. It decides whether the standoff check
+        gates. Above :data:`THETA_C_BILLIG_MAX` the spherical Billig reference
+        does not apply, so the check reports and does not gate. None gates the
+        standoff check at every angle.
 
     Returns
     -------
     dict
-        ``checks`` (list of Check), ``all_passed`` (bool), and the analytical
-        reference values keyed ``ref_qw``, ``ref_p02``, ``ref_standoff``.
+        ``checks`` as a list of Check, ``all_passed`` as a boolean, and the
+        three reference values under ``ref_qw``, ``ref_p02`` and
+        ``ref_standoff``.
     """
     ref_qw = fay_riddell_qw(M_inf, T_inf, p_inf, R_n, T_w)
     ref_p02 = rayleigh_pitot_p02(M_inf, p_inf)
@@ -139,12 +141,11 @@ def compare_to_analytical(
 # ============================================================================================
 
 def thermal_conductivity_air(T: float) -> float:
-    """Thermal conductivity of air at T from Sutherland viscosity + constant Pr.
+    """Thermal conductivity of air from Sutherland viscosity at fixed Prandtl.
 
-    ``k = mu(T) * cp / Pr`` with the calorically-perfect Pr_lam = 0.71. This is
-    the same constitutive model SU2 runs against, so the post-hoc q_w computed
-    on a predicted T field is dimensionally consistent with the Fay-Riddell
-    reference.
+    ``k = mu(T) * cp / Pr`` at the laminar Prandtl number of 0.71. The solver
+    runs the same model, so a heat flux computed here from a temperature field
+    rests on the same constitutive assumptions as the Fay-Riddell reference.
     """
     return sutherland_mu(T) * CP_AIR / PR_AIR
 
@@ -152,11 +153,12 @@ def thermal_conductivity_air(T: float) -> float:
 def identify_wall_nodes(
     T: np.ndarray, T_w: float, tol: float = 5.0,
 ) -> np.ndarray:
-    """Indices of nodes lying on the isothermal wall.
+    """Indices of the nodes that lie on the isothermal wall.
 
-    A node is on the wall iff ``|T - T_w| < tol``. The default 5 K matches the
-    small numerical drift seen on converged SU2 fields (the canonical case
-    has ~440 wall nodes with peak deviation ~1.2 K).
+    A node counts as a wall node when ``|T - T_w|`` falls below ``tol``. The
+    default of 5 K covers the numerical drift a converged field carries. The
+    canonical case holds about 440 wall nodes and its largest departure from
+    T_w is about 1.2 K.
     """
     return np.where(np.abs(np.asarray(T) - T_w) < tol)[0]
 
@@ -170,12 +172,12 @@ def _wall_normal(
     node_idx: int,
     k_tan: int = 4,
 ) -> np.ndarray:
-    """Inward unit wall-normal at one wall node.
+    """Inward unit normal to the wall at one wall node.
 
-    Tangent is the principal direction of the k_tan nearest other wall
-    nodes (SVD of their displacements). Normal is perpendicular to the
-    tangent, sign chosen so that it points into the fluid (where T is
-    higher than T_w).
+    The tangent is the principal direction of the ``k_tan`` nearest other wall
+    nodes, taken from a singular value decomposition of their displacements.
+    The normal is perpendicular to that tangent. Its sign is chosen so that it
+    points into the fluid, where the temperature exceeds T_w.
     """
     others = wall_indices[wall_indices != node_idx]
     dx = x[others] - x[node_idx]
@@ -187,9 +189,9 @@ def _wall_normal(
     _, _, vh = np.linalg.svd(pts, full_matrices=False)
     tangent = vh[0]
     normal = np.array([-tangent[1], tangent[0]])
-    # pick the direction in which T increases (away from the cold wall,
-    # into the hot post-shock fluid); the gradient direction is the
-    # T-weighted mean displacement of off-wall nodes near this wall node
+    # take the direction of rising temperature, which points away from the cold
+    # wall and into the hot fluid behind the shock. that direction is the mean
+    # displacement of the nearby off-wall nodes, weighted by temperature.
     wall_set = np.zeros(x.shape[0], dtype=bool)
     wall_set[wall_indices] = True
     cand_mask = ~wall_set
@@ -218,13 +220,18 @@ def compute_q_w_from_T(
 ) -> dict:
     """Stagnation-point wall heat flux from a per-node temperature field.
 
-    Identifies wall nodes (or uses ones passed in), picks the ``n_average``
-    closest to ``r = 0`` (subject to ``y_axis_skip`` to avoid the
-    axisymmetric singularity), and fits ``dT/dn`` by least-squares over each
-    wall node's nearest fluid neighbors. The wall-normal direction is not
-    computed explicitly; we use Euclidean distance from the wall node to
-    each fluid neighbor as the local along-normal coordinate. Near a smooth
-    wall and over a few BL cells this is the same number to leading order.
+    The function finds the wall nodes, or takes the ones it is given, keeps the
+    ``n_average`` of them closest to ``r = 0`` above the ``y_axis_skip`` band,
+    and reads the wall temperature gradient from the nearest fluid node along
+    the inward normal.
+
+    The result depends on how finely the mesh resolves the near-wall
+    temperature gradient. On the fine canonical mesh it agrees with the wall
+    heat flux SU2 reports to within about 5%. At the coarser resolution of the
+    sweep it underresolves that gradient and reads low by a large factor. Use it
+    to compare a predicted field against a true field through the same
+    estimator. Do not read it as a physical heat flux, and do not compare it
+    against the value in the ledger.
 
     Parameters
     ----------
@@ -233,36 +240,34 @@ def compute_q_w_from_T(
     T : np.ndarray
         Per-node temperature, shape (N,), Kelvin.
     T_w : float
-        Wall temperature in K (isothermal BC).
+        Wall temperature in K, the isothermal boundary condition.
     wall_indices : np.ndarray, optional
-        Pre-computed wall-node indices. If None, identified from ``T``
-        using :func:`identify_wall_nodes`. For evaluating a *predicted* T
-        field, pass the indices identified from the *ground-truth* T --
-        the surrogate has no architectural constraint that T = T_w at the
-        wall, so identification from predicted T would be circular.
+        Wall-node indices found earlier. None finds them from ``T`` through
+        :func:`identify_wall_nodes`. Against a *predicted* temperature field,
+        pass the indices found from the *true* field. The surrogate carries no
+        constraint that T equals T_w at the wall, so indices taken from its own
+        output would be circular.
     y_axis_skip : float
-        Skip wall nodes with ``r < y_axis_skip``. The axisymmetric source
-        term inflates wall values within ~5% of R_n of r = 0; the same
-        convention used in :func:`src.cfd.postprocess.stagnation_values`.
+        Drop wall nodes with ``r < y_axis_skip``. The axisymmetric source term
+        inflates wall values within about 5% of R_n of the axis. This matches
+        the convention in :func:`src.cfd.postprocess.stagnation_values`.
     n_average : int
-        Average the magnitude across the ``n_average`` smallest-r wall
-        nodes that survive the skip.
+        Average the magnitude over this many surviving wall nodes, taken at the
+        smallest r.
 
     Returns
     -------
     dict
-        ``q_w`` (float, W/m^2, the averaged stagnation magnitude);
-        ``per_node`` (np.ndarray, shape (n_average,), individual q_w
-        magnitudes); ``wall_node_indices`` (the ones used);
-        ``slopes`` (the fitted dT/dn values, K/m).
+        ``q_w``, the averaged stagnation magnitude in W/m^2. ``per_node``, the
+        individual magnitudes, of shape (n_average,). ``wall_node_indices``,
+        the nodes used. ``slopes``, the fitted values of dT/dn in K/m.
 
     Notes
     -----
-    Sign convention: q_w is returned as a magnitude (positive) and is
-    directly comparable to Fay-Riddell. The post-shock fluid is hot
-    (T peaks ~5000 K) and the wall is cold (T_w = 300 K), so the true
-    heat flux is into the wall regardless of which normal direction we
-    define.
+    ``q_w`` comes back as a positive magnitude, which is what Fay-Riddell
+    returns. The fluid behind the shock is hot, near 5000 K at its peak, and
+    the wall is cold at 300 K, so the heat flows into the wall whichever sign
+    the normal takes.
     """
     x = np.asarray(x, dtype=np.float64)
     r = np.asarray(r, dtype=np.float64)
@@ -289,8 +294,9 @@ def compute_q_w_from_T(
     slopes = np.empty(len(stag_nodes))
     q_per = np.empty(len(stag_nodes))
 
-    # neighbor candidates: any non-wall node (the wall is isothermal, so
-    # neighboring wall nodes contribute no T gradient, just bias)
+    # only off-wall nodes can serve as neighbours. the wall is isothermal, so a
+    # second wall node carries no temperature difference and would flatten the
+    # gradient
     wall_set = set(wall_indices.tolist())
     fluid_mask = np.ones_like(x, dtype=bool)
     for idx in wall_indices:
@@ -314,10 +320,11 @@ def compute_q_w_from_T(
             )
         proj_k = proj[keep]
         T_k = T_f[keep]
-        # BL T(n) is highly nonlinear; LSQ over multiple cells averages the
-        # wall slope down. The fine BL mesh (first cell ~R_n/30000) makes a
-        # one-sided FD anchored at T(0) = T_w the right move: take the
-        # nearest along-normal cell and use (T - T_w) / d as the wall slope.
+        # temperature through the boundary layer is far from linear, so a
+        # least-squares fit across several cells reads the wall slope low. the
+        # first cell sits about R_n/30000 from the wall, close enough that a
+        # one-sided difference anchored at the known T(0) = T_w beats the fit.
+        # take the nearest cell along the normal and use (T - T_w) / d.
         j = int(np.argmin(proj_k))
         slope = (T_k[j] - T_w) / proj_k[j]
         slopes[i] = slope
@@ -338,15 +345,16 @@ def compute_q_w_from_T(
 def format_summary(summary: dict) -> str:
     """Format the comparison result as a console-friendly table."""
     lines = []
-    lines.append(f"{'quantity':<24} {'SU2':>14} {'analytical':>14} {'rel err':>9} {'tol':>7} {'pass':>5}")
-    lines.append("-" * 76)
+    lines.append(f"{'quantity':<24} {'SU2':>14} {'analytical':>14} "
+                 f"{'rel. error':>11} {'limit':>7} {'pass':>5}")
+    lines.append("-" * 78)
     for c in summary["checks"]:
         verdict = "n/a" if not c.applicable else ("YES" if c.passed else "NO")
         lines.append(
             f"{c.name:<24} {c.su2:>14.4g} {c.analytical:>14.4g} "
-            f"{c.rel_err * 100:>+8.2f}% {c.tolerance * 100:>5.0f}% "
+            f"{c.rel_err * 100:>+10.2f}% {c.tolerance * 100:>5.0f}% "
             f"{verdict:>5}"
         )
-    lines.append("-" * 76)
+    lines.append("-" * 78)
     lines.append(f"all passed: {summary['all_passed']}")
     return "\n".join(lines)

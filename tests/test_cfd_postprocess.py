@@ -1,5 +1,8 @@
-"""Unit tests for SU2 postprocess: surface CSV parsing, stagnation pick,
-shock-standoff finder. Synthetic data only -- no SU2 run required."""
+"""Tests for the readers of SU2 output.
+
+They cover the surface .csv parser, the choice of stagnation node, and the
+shock-standoff finder. Every input here is synthetic, so no SU2 run is needed.
+"""
 
 from __future__ import annotations
 
@@ -63,10 +66,10 @@ def test_extract_surface_quoted_header(tmp_path):
 
 def test_extract_surface_vtu_roundtrip(tmp_path):
     pv = pytest.importorskip("pyvista", reason="pyvista not available")
-    import vtk  # noqa: F401  (pyvista needs vtk available)
+    import vtk  # noqa: F401  -- pyvista needs vtk present
 
-    # build an UnstructuredGrid with a couple of line cells (matches the
-    # shape of SU2's surface_flow.vtu output)
+    # build an unstructured grid from two line cells, which is the shape SU2
+    # writes into surface_flow.vtu
     pts = np.array([
         [0.0,   0.0,   0.0],
         [0.001, 0.001, 0.0],
@@ -159,8 +162,8 @@ def test_shock_standoff_threshold_fallback_matches_truth():
     truth = -0.005
     axis = _synthetic_axis(x_shock=truth)
     res = find_shock_standoff(axis, p_inf=100.0)
-    # threshold pick lands on the leading edge of the smear, which is upstream
-    # of the center; tolerance reflects the smear width
+    # the threshold pick lands on the leading edge of the smear, upstream of
+    # its centre, so the tolerance here matches the smear width
     assert res["x_shock_threshold"] == pytest.approx(truth, abs=3e-3)
     assert res["x_shock_threshold"] < truth  # leading edge upstream of center
 
@@ -201,8 +204,8 @@ def test_extract_training_tensors_from_synthetic_vtu(tmp_path):
 
 
 def test_shock_standoff_handles_no_shock():
-    # uniform freestream, no shock at all -- all picks should be rejected and
-    # standoff returned as NaN rather than a near-endpoint constant
+    # a uniform freestream holds no shock at all. every pick must be rejected
+    # and the standoff must come back as NaN, not as a value near an endpoint.
     x = np.linspace(-0.04, 0.0, 1000)
     p = np.full_like(x, 100.0)
     res = find_shock_standoff({"x": x, "p": p}, p_inf=100.0)
@@ -213,13 +216,13 @@ def test_shock_standoff_handles_no_shock():
 
 
 def test_shock_standoff_collapsed_returns_nan():
-    """Shock pinned within a few cells of the body endpoint: must be NaN'd.
+    """A shock within a few cells of the body end of the line must return NaN.
 
-    This is the sweep's sharp-cone stall failure mode -- the second-order
-    SU2 solve settles with the bow shock at x ~ -1 grid cell, behind which
-    a 6000 K shock layer sits against a 300 K wall. Pre-fix, the threshold
-    pick latched onto the second-to-last grid index and the standoff came
-    back as a finite ~3e-4 m constant, silently passing along garbage data.
+    A sharp cone can stall the sweep this way. The second-order solve settles
+    with the bow shock about one grid cell from the wall, so a shock layer near
+    6000 K sits against a wall at 300 K. Without the guard the threshold pick
+    lands on the second-to-last grid index and the standoff comes back as a
+    finite constant near 3e-4 m, which reads as a measurement and is not one.
     """
     n = 2000
     x = np.linspace(-0.6, 0.0, n)
@@ -234,8 +237,8 @@ def test_shock_standoff_collapsed_returns_nan():
 
 
 def test_shock_standoff_far_upstream_pick_rejected():
-    # if the only "shock-like" feature sits within min_cells of the freestream
-    # end of the line, it is also degenerate (no real bow shock found)
+    # a feature that looks like a shock but sits within min_cells of the
+    # freestream end of the line is equally degenerate: no bow shock was found
     n = 2000
     x = np.linspace(-0.6, 0.0, n)
     p = np.full_like(x, 100.0)
@@ -246,8 +249,8 @@ def test_shock_standoff_far_upstream_pick_rejected():
 
 
 def test_shock_standoff_valid_pick_marked_valid():
-    # well-resolved shock far from both endpoints stays valid and reports
-    # the standoff with the same sign convention as before the NaN guard
+    # a well-resolved shock far from both ends stays valid and reports the
+    # standoff with the usual sign convention
     axis = _synthetic_axis(x_shock=-0.005)
     res = find_shock_standoff(axis, p_inf=100.0)
     assert res["valid"] is True

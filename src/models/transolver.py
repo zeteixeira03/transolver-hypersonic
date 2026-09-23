@@ -7,14 +7,17 @@ Tsinghua University). The reference paper is Wu et al., "Transolver: A Fast
 Transformer Solver for PDEs on General Geometries", ICML 2024,
 arXiv:2402.02366.
 
-Modifications relative to upstream:
-- forward takes plain tensors (B, N, C) and an optional position tensor
-  instead of a PyTorch Geometric `Data` object, so the module can be tested
-  and reused outside the AirfRANS pipeline.
-- `unified_pos` reference grid bounds and resolution are parameters, not
-  hard-coded to the AirfRANS spatial domain.
-- snake_case for the public wrapper module's function-style helpers; the
-  PyTorch Module classes keep CamelCase as is conventional.
+Four differences from the reference implementation which matter to anyone who
+compares this file against the authors' repository:
+
+- ``forward`` takes plain tensors of shape (B, N, C) and an optional position
+  tensor. The reference takes a PyTorch Geometric ``Data`` object. Plain tensors
+  let the module run and be tested outside the AirfRANS pipeline.
+- The bounds and the resolution of the ``unified_pos`` reference grid are
+  parameters. The reference fixes them to the AirfRANS spatial domain.
+- Function-style helpers use snake_case. The PyTorch Module classes keep
+  CamelCase, as PyTorch does.
+- An optional case-level head predicts stagnation wall heat flux.
 
 Equation numbers refer to arXiv:2402.02366.
 """
@@ -48,7 +51,7 @@ class PhysicsAttentionIrregularMesh(nn.Module):
     """
     Physics-Attention for point clouds / irregular meshes.
 
-    The block (Eqs. 6-9 in arXiv:2402.02366) performs three steps:
+    The block covers Equations 6 to 9 of arXiv:2402.02366 in three steps:
 
     1. Slice. Each of N points is softly assigned to one of M learned slices
        via softmax weights w(x_i, j). A slice token z_j is the
@@ -58,8 +61,8 @@ class PhysicsAttentionIrregularMesh(nn.Module):
     3. Deslice. Each point's output is the weighted sum of the attended slice
        tokens, weighted by the same slice assignments from step 1.
 
-    The slicing is per-head: heads can specialize on different physical
-    regimes (e.g. boundary layer vs free stream).
+    Each head slices independently, so a head can specialize on one physical
+    regime such as the boundary layer or the free stream.
     """
 
     def __init__(
@@ -85,8 +88,8 @@ class PhysicsAttentionIrregularMesh(nn.Module):
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
         self.in_project_slice = nn.Linear(dim_head, slice_num)
-        # orthogonal init on the slice-assignment projection encourages
-        # diverse slice prototypes at initialization
+        # an orthogonal start on the slice-assignment projection spreads the
+        # slice prototypes apart before the first step
         nn.init.orthogonal_(self.in_project_slice.weight)
 
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
@@ -116,11 +119,12 @@ class PhysicsAttentionIrregularMesh(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        # temperature is learnable but unbounded upstream; clamp magnitude to
-        # avoid division by ~0 producing inf logits under fp16 autocast.
+        # the temperature is a free parameter and can reach zero, which would
+        # send the logits to infinity under float16 autocast. the floor of 0.1
+        # keeps the division bounded.
         temp = self.temperature.abs().clamp_min(0.1)
-        # softmax in fp32 always: fp16 softmax overflows mid-training once
-        # logits grow even slightly large, even with a temperature floor.
+        # the softmax always runs in float32. float16 overflows here once the
+        # logits grow at all, which the temperature floor alone does not prevent.
         slice_logits = (self.in_project_slice(x_mid) / temp).float()
         slice_weights = self.softmax(slice_logits).to(fx_mid.dtype)  # (B, H, N, M)
         slice_norm = slice_weights.sum(2)  # (B, H, M), sum over points per slice
@@ -134,7 +138,7 @@ class PhysicsAttentionIrregularMesh(nn.Module):
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
         dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-        # softmax in fp32 for the same fp16-overflow reason as above
+        # float32 softmax, for the same overflow reason as the slice step
         attn = self.dropout(self.softmax(dots.float()).to(q.dtype))
         out_slice_token = torch.matmul(attn, v)  # (B, H, M, dim_head)
 
@@ -146,7 +150,7 @@ class PhysicsAttentionIrregularMesh(nn.Module):
 
 
 # ============================================================================================
-#                                       feed-forward MLP
+#                                    feed-forward network
 # ============================================================================================
 class MLP(nn.Module):
     def __init__(
@@ -232,10 +236,10 @@ class Transolver(nn.Module):
     optional auxiliary functions occupy the remaining `fun_dim` channels.
     Outputs are per-point predictions of shape (B, N, out_dim).
 
-    `unified_pos` adds a fixed reference-grid distance encoding of size
-    `ref**2` to each point, useful when comparing very different geometries
-    in the same coordinate system. The grid is parameterized by its bounds
-    and resolution rather than hard-coded.
+    ``unified_pos`` appends to each point its distance to every node of a fixed
+    reference grid, which adds ``grid_ref**2`` channels. Those distances give
+    the model a common frame when the geometries differ widely. The bounds and
+    the resolution of the grid are parameters.
 
     Parameters
     ----------
@@ -252,23 +256,25 @@ class Transolver(nn.Module):
     n_head : int
         Number of attention heads.
     mlp_ratio : int
-        Hidden expansion factor inside each block's MLP.
+        Hidden expansion factor inside the feed-forward network of each block.
     slice_num : int
         Number of physics slices M used by Physics-Attention.
     dropout : float
         Dropout applied inside attention and the output projection.
     act : str
-        Activation name; one of ACTIVATIONS.
+        Activation name. One of the keys of ACTIVATIONS.
     unified_pos : bool
         Whether to append reference-grid distance features.
     grid_ref : int
         Resolution of the reference grid along each axis.
     grid_bounds : tuple of float
-        Reference-grid bounds (xmin, xmax, ymin, ymax). 2D only for now.
+        Bounds of the reference grid, (xmin, xmax, ymin, ymax). Two dimensions
+        only.
     qw_head : bool
-        Add a case-level scalar head for stagnation wall heat flux, read off
-        a mean-pool of the final hidden features. When set, ``forward``
-        returns ``(per_point, scalar)`` instead of just the per-point tensor.
+        Add a case-level scalar head for the stagnation wall heat flux. It reads
+        the mean over points of the final hidden features. When set, ``forward``
+        returns the pair ``(per_point, scalar)`` rather than the per-point
+        tensor alone.
     """
 
     def __init__(
@@ -317,9 +323,9 @@ class Transolver(nn.Module):
             ]
         )
 
-        # mean-pooling is scale-free in the node count, so the 8192-node
-        # training subsample estimates the same statistic as the full mesh
-        # used at eval time.
+        # the mean over points does not depend on how many points there are, so
+        # the 8192-node subsample seen in training estimates the same statistic
+        # as the full mesh seen at evaluation
         self.qw_head = (
             MLP(n_hidden, n_hidden, 1, n_layers=1, act=act) if qw_head else None
         )
@@ -385,7 +391,7 @@ class Transolver(nn.Module):
         -------
         torch.Tensor
             Per-point predictions of shape (B, N, out_dim). When the model
-            was built with ``qw_head``, returns that tensor paired with a
+            carries ``qw_head``, the return value is that tensor paired with a
             per-case scalar of shape (B,).
         """
         if self.unified_pos:

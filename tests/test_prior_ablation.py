@@ -1,10 +1,11 @@
 """Tests for the physics-prior ablation: q_w encoding, the head, and the table.
 
-The load-bearing checks here are the two that would silently corrupt a
-results row rather than crash: the q_w residual encoding must invert exactly
-(a broken decode looks like a plausible heat-flux number), and the table must
-score each q_w estimate against its own truth, since the finite-difference
-and ledger values differ by more than an order of magnitude on this dataset.
+Two checks here carry the weight, because a failure in either corrupts a
+results row instead of raising. The residual encoding of the heat flux must
+invert exactly, since a broken decode still returns a plausible number. And the
+table must score each heat-flux estimate against its own truth, because the
+finite-difference value and the ledger value differ by more than a factor of ten
+on this dataset.
 """
 
 from __future__ import annotations
@@ -66,7 +67,7 @@ def test_residual_head_at_zero_returns_the_analytical_value():
 
 
 def test_direct_and_residual_differ_in_scale():
-    """Direct targets live near log10 q_w; residual targets near zero."""
+    """A direct target sits near log10 q_w and a residual target sits near zero."""
     qw, q_fr = 4.2e6, 3.9e6
     assert QwSpec("direct", 0.0, 1.0).log_target(qw, q_fr) > 6.0
     assert abs(QwSpec("residual", 0.0, 1.0).log_target(qw, q_fr)) < 0.1
@@ -113,9 +114,9 @@ def test_qw_head_is_insensitive_to_node_count():
 #                                       run capture
 # ============================================================================================
 
-# Training happens on rented GPUs whose output is destroyed when the notebook
-# is re-pushed, so anything these assertions let slip is only recoverable by
-# spending quota again.
+# training happens on rented machines, and pushing the notebook again destroys
+# their output. anything these assertions let through costs another session of
+# quota to recover.
 
 def _fake_batch(n_nodes: int = 32, qw: float = 0.5) -> dict:
     x = torch.randn(1, n_nodes, POS_DIM + N_CASE_PARAMS)
@@ -137,7 +138,7 @@ def test_epoch_record_carries_every_cheap_scalar(qw_weight):
 
 
 def test_grad_norm_is_measured_even_without_clipping():
-    """grad_clip <= 0 must still report the norm, not silently zero it."""
+    """A grad_clip of zero or less must still report the norm rather than zero."""
     model = _model(qw_head=False)
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4)
     rec = train_one_epoch(model, [_fake_batch()], opt, "cpu", 0.0)
@@ -193,7 +194,8 @@ def test_parse_run_dir_rejects_unparseable_names():
 
 def test_tier_mean_rl2_averages_common_channels_only():
     recs = [{"rL2": {"rho": 0.1, "u": 0.2, "v": 0.3, "T": 0.4, "p": 9.9}}]
-    # p is excluded, so a five-channel cell stays comparable to a four-channel one
+    # pressure is excluded, which keeps a five-channel cell comparable to a
+# four-channel one
     assert tier_mean_rl2(recs, COMMON_CHANNELS) == pytest.approx(0.25)
 
 
@@ -207,7 +209,7 @@ def test_qw_columns_use_their_own_truths():
              "qw_ledger": 2.7e6, "qw_head_pred": 2.7e6}]
     assert qw_abs_rel_median(recs, "qw_pred", "qw_true") == pytest.approx(0.1)
     assert qw_abs_rel_median(recs, "qw_head_pred", "qw_ledger") == pytest.approx(0.0)
-    # scored against the wrong truth the head would look 26x off
+    # against the wrong truth the head would look wrong by a factor of 26
     assert qw_abs_rel_median(recs, "qw_head_pred", "qw_true") > 20
 
 
@@ -217,7 +219,7 @@ def test_qw_median_is_none_without_records():
 
 
 def test_nonphysical_column_surfaces_negative_density():
-    """The column that stops rel-L2 ranking an unusable field first."""
+    """The column that stops the relative L2 from ranking an unusable field first."""
     valid = {"n_train": 100, "interp": 0.15, "family": 0.15, "ood": 0.3,
              "qw_posthoc": 0.3, "qw_head": None, "eos_viol": 0.0, "nonpos": 0.0}
     better_but_broken = dict(valid, interp=0.09, family=0.09, nonpos=0.0233)

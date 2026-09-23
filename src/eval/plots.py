@@ -1,10 +1,10 @@
 """
-AirfRANS acceptance figure: predicted vs ground-truth flow on one held-out
-airfoil. Two panels: surface Cp(x) on the left, |U| field on the right.
+Acceptance figure for AirfRANS: the prediction beside the ground truth on one
+held-out airfoil. The left panel carries the surface pressure coefficient
+against x, and the right panel carries the velocity magnitude field.
 
-Pressure in AirfRANS is stored as p / specific_mass (m^2/s^2). The
-freestream pressure is zero in this representation, so the pressure
-coefficient simplifies to
+AirfRANS stores pressure divided by specific mass, in m^2/s^2. The freestream
+pressure is zero in that form, so the pressure coefficient reduces to
 
     Cp = (p / rho) / (0.5 * U_inf^2).
 """
@@ -29,12 +29,13 @@ def surface_cp(
     inlet_velocity: torch.Tensor,
 ) -> np.ndarray:
     """
-    Pressure coefficient on airfoil surface points.
+    Pressure coefficient at the points that lie on the airfoil.
 
     Parameters
     ----------
     pred_or_true : torch.Tensor
-        Per-point target tensor (N, 4) in physical units. Column 2 is p/rho.
+        Per-point target tensor of shape (N, 4) in physical units. Column 2
+        holds pressure divided by density.
     surface : torch.Tensor
         Boolean mask of shape (N,) marking airfoil surface points.
     inlet_velocity : torch.Tensor
@@ -65,9 +66,9 @@ def plot_acceptance(
     save_path: Path | str | None = None,
 ) -> tuple[plt.Figure, dict[str, float]]:
     """
-    Build the two-panel AirfRANS acceptance figure for one held-out
-    simulation. Returns the figure and a dict of relative-L2 metrics shown
-    in the panel titles.
+    Build the two-panel acceptance figure for one held-out simulation.
+
+    Returns the figure and the relative L2 values that its panel titles carry.
     """
     model.eval()
     saved_subsample = dataset.subsample
@@ -86,13 +87,15 @@ def plot_acceptance(
 
     pred = denormalize_targets(model(x, pos=pos).squeeze(0), stats.to(device))
 
-    # rel-L2 metrics for titles
+    # relative L2 per channel, for the panel titles
     num = (pred - y_true).pow(2).sum(dim=0).sqrt()
     den = y_true.pow(2).sum(dim=0).sqrt().clamp_min(1e-12)
     rl2_full = (num / den).cpu().numpy()
 
-    # surface rL2 only computed for pressure: u, v are ~0 by no-slip and
-    # nu_t is ~0 on the wall, so per-channel rel-L2 there is meaningless
+    # on the surface only pressure gets a relative L2. the no-slip condition
+    # holds both velocity components near zero there, and the turbulent
+    # viscosity is near zero at the wall, so a relative error on those three
+    # divides by nothing
     if surface.any():
         p_pred_s = pred[surface, 2]
         p_true_s = y_true[surface, 2]
@@ -102,9 +105,11 @@ def plot_acceptance(
     else:
         rl2_surf_p = float("nan")
 
-    # panel 1: surface Cp(x), split by surface-normal y-sign so upper and
-    # lower surface plot as two separate single-valued curves instead of a
-    # zigzag through both. surface normals are in raw arr cols 5..6.
+    # panel 1: the surface pressure coefficient against x. the sign of the y
+    # component of the surface normal splits upper from lower, so each side
+    # draws as one curve with a single value per x rather than one line that
+    # crosses back and forth. the normals sit in columns 5 and 6 of the raw
+    # array.
     surf_mask = item["surface"].cpu().numpy()
     surface_xy = pos_np[surf_mask]
     raw = dataset.arrays[sim_index]
@@ -114,7 +119,7 @@ def plot_acceptance(
     cp_true = surface_cp(y_true, surface, inlet.to(device))
     cp_pred = surface_cp(pred, surface, inlet.to(device))
 
-    # panel 2: |U| field
+    # panel 2: the velocity magnitude field
     u_true = y_true[:, :2].pow(2).sum(dim=-1).sqrt().cpu().numpy()
     u_pred = pred[:, :2].pow(2).sum(dim=-1).sqrt().cpu().numpy()
 

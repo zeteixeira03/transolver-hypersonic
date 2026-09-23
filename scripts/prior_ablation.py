@@ -1,32 +1,35 @@
 """Physics-prior ablation: low-data split construction and the results table.
 
-Three priors that the surrogate normally carries are switched off one at a
-time and priced against a baseline, on a deliberately small training split.
-Priors are supposed to earn their place when data is scarce; on the full
-dataset the rows would likely be indistinguishable.
+The surrogate carries three physics priors. Each one is switched off in turn
+and priced against a baseline that keeps all three. The training split is small
+on purpose, because a prior earns its place when data is scarce. On the full
+dataset these rows would sit too close together to separate.
 
 Cells
 -----
-``base``        hard EoS (p reconstructed), log10 on rho and T, no q_w head
-``free_p``      p emitted as a free fifth channel (EoS constraint relaxed)
+``base``        pressure reconstructed, log10 on density and temperature
+``free_p``      pressure as a free fifth channel, no equation-of-state constraint
 ``plain_norm``  plain standardization on every channel
-``qw_direct``   auxiliary head predicting log10 q_w
-``qw_resid``    auxiliary head predicting log10(q_w / q_FR)
+``qw_direct``   a second head that predicts log10 of the wall heat flux
+``qw_resid``    a second head that predicts log10 of q_w over the Fay-Riddell value
 
-The Fay-Riddell prior is measured by ``qw_resid`` against ``qw_direct``, not
-against ``base``; ``qw_direct`` is the control for the auxiliary loss itself.
+``qw_resid`` is measured against ``qw_direct`` and not against ``base``, because
+``qw_direct`` is the control for the second head itself. Comparing against
+``base`` would price the head and the Fay-Riddell anchor together.
 
 Splits
 ------
-Only the train split is small. The evaluation tiers are pinned to an existing
-run's exact case lists so every cell is scored on identical held-out cases at
-full size. The train split is drawn from the core group alone, stratified by
-geometry, and excludes the active-learning cases: those were chosen
-adaptively by ensemble uncertainty, so they are not an iid sample of the
-parameter box and would confound a comparison between priors.
+Only the training split is small. The evaluation tiers take their exact case
+lists from an existing run, so every cell is scored on the same held-out cases
+at full size.
 
-The split file lives in ``configs/`` rather than under ``data/processed/``
-because training runs on a cloned checkout and ``data/processed/`` is not
+The training split is drawn from the core group alone, stratified by geometry.
+It excludes the active-learning cases. Ensemble uncertainty selected those
+adaptively, so they are not an independent and identically distributed sample
+of the parameter box and would confound a comparison between priors.
+
+The split file lives in ``configs/`` rather than under ``data/processed/``,
+because training runs from a fresh clone and ``data/processed/`` is not
 committed.
 
 Usage
@@ -58,15 +61,15 @@ if str(ROOT) not in sys.path:
 from src.data.su2 import TARGET_ORDER
 
 
-# common channels across every cell. the free-pressure arm predicts a fifth,
-# and averaging over 5 channels against 4 would not be a like-for-like tier
-# number, so the tier metric always uses these and p is reported on its own.
+# the channels every cell shares. the free-pressure cell predicts a fifth one,
+# and a mean over five channels does not compare against a mean over four. the
+# tier metric therefore always uses these four, and pressure is reported alone.
 COMMON_CHANNELS = TARGET_ORDER
 
 CELL_ORDER = ("base", "free_p", "plain_norm", "qw_direct", "qw_resid")
 CELL_LABELS = {
-    "base": "baseline (hard EoS, log rho/T)",
-    "free_p": "free p channel (no EoS constraint)",
+    "base": "baseline (reconstructed p, log rho and T)",
+    "free_p": "free p channel (no equation-of-state constraint)",
     "plain_norm": "plain standardization (no log)",
     "qw_direct": "q_w head, direct",
     "qw_resid": "q_w head, Fay-Riddell residual",
@@ -88,27 +91,27 @@ def build_splits(
     n_train: int,
     seed: int,
 ) -> dict[str, list[str]]:
-    """Pin the eval tiers to a reference run and subsample a small train split.
+    """Take the evaluation tiers from a reference run and draw a small training split.
 
     Parameters
     ----------
     reference_per_case : Path
-        ``per_case_eval.json`` from the run whose val/test/interp membership
-        should be reused verbatim.
+        ``per_case_eval.json`` from the run whose validation, test and
+        interpolation membership is copied without change.
     ledger : Path
-        Sweep ledger, read for group and geometry ids.
+        The sweep ledger, read for the group and geometry ids.
     n_train : int
-        Size of the low-data train split.
+        Size of the small training split.
     seed : int
-        Seed for the stratified draw. Written into the file so the split is
-        reproducible.
+        Seed for the stratified draw. It is written into the file, so the split
+        can be rebuilt.
 
     Returns
     -------
     dict
-        ``{split_name: [case_name, ...]}`` for train, val, test, test_interp.
-        OOD slabs are left out; they are whole ledger groups and already
-        deterministic.
+        ``{split_name: [case_name, ...]}`` for train, val, test and
+        test_interp. The extrapolation slabs are absent, because each one is a
+        whole ledger group and needs no draw.
     """
     per_case = json.loads(reference_per_case.read_text())
     splits = {name: [r["name"] for r in per_case[name]]
@@ -131,8 +134,9 @@ def build_splits(
     if pool_size < n_train:
         raise SystemExit(f"train pool has {pool_size} cases, need {n_train}")
 
-    # round-robin across geometries so a small draw still spans the shape
-    # family rather than piling onto whichever geometries have most cases
+    # take one case per geometry in turn, so a small draw still covers the
+    # family of shapes instead of filling up from the geometries with the most
+    # cases
     rng = random.Random(seed)
     geoms = sorted(by_geom)
     rng.shuffle(geoms)
@@ -166,7 +170,7 @@ def parse_run_dir(run_dir: Path) -> tuple[str, int]:
 
 
 def tier_mean_rl2(records: list[dict], channels: tuple[str, ...]) -> float | None:
-    """Mean over cases of the per-case mean rel-L2 across ``channels``."""
+    """Mean over cases of the per-case mean relative L2 across ``channels``."""
     if not records:
         return None
     return float(np.mean([
@@ -175,13 +179,13 @@ def tier_mean_rl2(records: list[dict], channels: tuple[str, ...]) -> float | Non
 
 
 def qw_abs_rel_median(records: list[dict], key: str, truth_key: str) -> float | None:
-    """Median |relative error| of a q_w estimate against its own truth.
+    """Median absolute relative error of a heat-flux estimate against its own truth.
 
-    The post-hoc estimate is scored against the finite-difference value on
-    the true field; the head is scored against the ledger value it was
-    trained on. Passing the truth key explicitly keeps those from being
-    crossed, which silently inflates the head error by the factor between
-    the two estimators.
+    Two heat-flux numbers exist per case and they are not interchangeable. The
+    estimate read off the temperature field is scored against the same estimator
+    applied to the true field. The head is scored against the ledger value it
+    trained on. The caller names the truth key, so the two never cross. Crossing
+    them would inflate the head error by the factor between the estimators.
     """
     rel = [abs(r[key] - r[truth_key]) / abs(r[truth_key])
            for r in records
@@ -190,7 +194,7 @@ def qw_abs_rel_median(records: list[dict], key: str, truth_key: str) -> float | 
 
 
 def summarize_run(run_dir: Path) -> dict:
-    """Tier metrics for one run directory."""
+    """Collect the tier metrics of one run directory into a single record."""
     per_case = json.loads((run_dir / "per_case_eval.json").read_text())
     final = json.loads((run_dir / "final_eval.json").read_text())
 
@@ -209,9 +213,10 @@ def summarize_run(run_dir: Path) -> dict:
         out["rL2_p"] = tier_mean_rl2(per_case["test"], ("p",))
     eos = [r["eos_viol"] for r in in_dist if "eos_viol" in r]
     out["eos_viol"] = float(np.median(eos)) if eos else 0.0
-    # worst offender across the positive-definite channels. rel-L2 hardly
-    # notices a negative freestream density, so without this column the table
-    # ranks an unusable field above a valid one.
+    # the worst of the channels that physics requires to stay positive. a
+    # negative freestream density moves the relative L2 little, because those
+    # nodes carry small magnitudes. without this column the table would rank an
+    # unusable field above a valid one.
     nonpos = [max(r.get(f"frac_nonpos_{c}", 0.0) for c in ("rho", "T", "p"))
               for r in in_dist
               if any(f"frac_nonpos_{c}" in r for c in ("rho", "T", "p"))]
@@ -238,7 +243,7 @@ def render_table(by_cell: dict[str, list[dict]]) -> str:
     header = (
         f"Physics-prior ablation, n_train = {sorted(n_trains)}, "
         f"{sorted(n_seeds)} seed(s) per cell.\n"
-        "Mean rel-L2 over (rho, u, v, T) so every cell is scored on the same\n"
+        "Mean relative L2 over (rho, u, v, T), so every cell is scored on the same\n"
         "channels, pooled over the two in-distribution tiers; cells show\n"
         "mean +/- std across seeds.\n\n"
         "The two q_w columns are median |relative error| against different\n"
@@ -249,8 +254,8 @@ def render_table(by_cell: dict[str, list[dict]]) -> str:
         "column down its own cells, never across.\n\n"
     )
     lines = [
-        "| prior cell | interpolation | family holdout | OOD pooled | q_w post-hoc "
-        "| q_w head | EoS violation | nonphysical |",
+        "| prior cell | interpolation | family holdout | pooled extrapolation "
+        "| q_w post-hoc | q_w head | equation-of-state violation | nonphysical |",
         "|---|---|---|---|---|---|---|---|",
     ]
     for cell in CELL_ORDER:
@@ -292,15 +297,16 @@ def main() -> None:
 
     mk = sub.add_parser("make-splits", help="write the pinned low-data split file")
     mk.add_argument("--reference", required=True,
-                    help="per_case_eval.json whose eval tiers should be reused")
+                    help="per_case_eval.json whose evaluation tiers are copied")
     mk.add_argument("--workdir", default="data/raw/sweep")
     mk.add_argument("--n-train", type=int, default=100)
     mk.add_argument("--seed", type=int, default=0)
     mk.add_argument("--out", required=True)
 
-    tb = sub.add_parser("table", help="render the ablation table from run dirs")
+    tb = sub.add_parser("table", help="render the ablation table from run directories")
     tb.add_argument("run_dirs", nargs="+")
-    tb.add_argument("--out", default=None, help="write the table here as well as stdout")
+    tb.add_argument("--out", default=None,
+                    help="write the table to this file as well as to the console")
 
     args = p.parse_args()
 

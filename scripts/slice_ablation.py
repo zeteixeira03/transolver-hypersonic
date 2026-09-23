@@ -1,21 +1,25 @@
 """Slice-count ablation tables and the envelope-distance figure.
 
-Consumes the ``final_eval.json`` + ``per_case_eval.json`` pairs written by
-``scripts/train.py`` (one run dir per slice count) and emits:
+The script reads the ``final_eval.json`` and ``per_case_eval.json`` pair that
+``scripts/train.py`` leaves in each run directory, one directory per slice
+count, and writes three things:
 
-1. the ablation table, mean rel-L2 per tier as a function of slice count M,
-   with the per-tier optimum flagged (does the best M shift core vs OOD?)
-2. the tier table for one chosen M: per-channel rel-L2 across the three
-   tiers (interpolation, family holdout, OOD slabs)
-3. the error-vs-envelope-distance figure with the guard threshold marked
+1. the ablation table, which holds the mean relative L2 per tier against the
+   slice count M and marks the best M in each column. The best M inside the
+   training box and the best M outside it need not agree.
+2. the tier table for one chosen M, which holds the relative L2 per channel
+   across the interpolation tier, the family holdout, and the extrapolation
+   slabs.
+3. the figure of error against envelope distance, with the guard threshold
+   drawn on it.
 
-Envelope distance is the L-inf normalized box-exceedance over the case
-parameters: for each parameter with train range [lo, hi], the distance is
-max(0, (v - hi) / (hi - lo), (lo - v) / (hi - lo)), and the case distance is
-the max over parameters. Cases inside the training box sit at 0. The guard
-flag combines this with the Knudsen floor: flag any input with distance
-above the threshold or Kn > 0.01 (the continuum-validity limit of the
-ground truth itself).
+Envelope distance measures how far a case falls outside the training box. For
+one parameter with training range [lo, hi] it is
+max(0, (v - hi) / (hi - lo), (lo - v) / (hi - lo)), and the distance of the case
+is the largest of those over its parameters. A case inside the box sits at 0.
+The guard combines that distance with the Knudsen number and flags any input
+past the distance threshold or above a Knudsen number of 0.01, which is where
+the ground truth itself stops being valid.
 
 Usage
 -----
@@ -44,7 +48,7 @@ from src.analytical import knudsen_number
 from src.data.su2 import CASE_PARAM_ORDER, TARGET_ORDER
 
 
-KN_MAX = 0.01                                 # continuum floor, matches src.data.sampler
+KN_MAX = 0.01                                 # continuum floor, as in src.data.sampler
 TIER_LABELS = {
     "test_interp": "interpolation",
     "test": "family holdout",
@@ -76,7 +80,7 @@ def ood_splits(run: dict) -> list[str]:
 
 
 def pooled_ood_mean(run: dict) -> float:
-    """Per-case mean rel-L2 pooled over every OOD slab present."""
+    """Mean relative L2 per case, pooled over every extrapolation slab present."""
     vals = [np.mean([r["rL2"][c] for c in TARGET_ORDER])
             for s in ood_splits(run) for r in run["per_case"][s]]
     return float(np.mean(vals))
@@ -87,23 +91,30 @@ def pooled_ood_mean(run: dict) -> float:
 # ============================================================================================
 
 def envelope_distance(params: dict[str, float], envelope: dict[str, list[float]]) -> float:
-    """L-inf normalized box-exceedance of one case over the train envelope."""
+    """How far one case falls outside the training envelope.
+
+    Each parameter is measured in units of its own box width, and the result is
+    the largest of those. A case inside the box returns 0.
+    """
     d = 0.0
     for k in CASE_PARAM_ORDER:
         lo, hi = envelope[k]
         width = hi - lo
         if width <= 0:
-            continue                          # constant parameter (T_w)
+            continue                          # a parameter held constant, such as T_w
         d = max(d, (params[k] - hi) / width, (lo - params[k]) / width)
     return max(d, 0.0)
 
 
 def per_case_table(run: dict) -> list[dict]:
-    """Flatten per-case records across eval splits, adding distance, Kn, tier."""
+    """Flatten the per-case records of every evaluation split into one list.
+
+    Each row gains its envelope distance, its Knudsen number, and its tier.
+    """
     rows = []
     for split, recs in run["per_case"].items():
         if split == "val":
-            continue                          # model-selection split, not an eval tier
+            continue                          # the split that selects the model, not a tier
         for r in recs:
             p = r["case_params"]
             rows.append({
@@ -121,7 +132,10 @@ def per_case_table(run: dict) -> list[dict]:
 # ============================================================================================
 
 def ablation_table(runs: list[dict]) -> str:
-    """Markdown: mean rel-L2 per tier vs slice count, optimum starred per column."""
+    """Render the mean relative L2 per tier against slice count, as Markdown.
+
+    The best value in each column comes out in bold.
+    """
     runs = sorted(runs, key=lambda r: r["slice_num"])
     slabs = sorted({s for r in runs for s in ood_splits(r)})
     cols = ["test_interp", "test", *slabs]
@@ -133,8 +147,8 @@ def ablation_table(runs: list[dict]) -> str:
         row["ood_pooled"] = pooled_ood_mean(r)
         rows.append(row)
 
-    header = ["M", "interp", "family-holdout", *[s.removeprefix("ood_") for s in slabs],
-              "OOD pooled"]
+    header = ["M", "interpolation", "family holdout",
+              *[s.removeprefix("ood_") for s in slabs], "pooled extrapolation"]
     keys = ["M", "test_interp", "test", *slabs, "ood_pooled"]
     best = {k: min((row[k] for row in rows if row[k] is not None), default=None)
             for k in keys[1:]}
@@ -153,15 +167,16 @@ def ablation_table(runs: list[dict]) -> str:
 
 
 def tier_table(run: dict) -> str:
-    """Markdown: per-channel rel-L2 across tiers for one slice count."""
+    """Render the relative L2 per channel across every tier, for one slice count."""
     order = ["test_interp", "test", *sorted(ood_splits(run))]
-    lines = ["| tier | " + " | ".join(TARGET_ORDER) + " | mean | n | qw med abs err |",
+    lines = ["| tier | " + " | ".join(TARGET_ORDER)
+             + " | mean | n | median q_w error |",
              "|" + "---|" * (len(TARGET_ORDER) + 4)]
     for s in order:
         if s not in run["final"]:
             continue
         m = run["final"][s]
-        label = TIER_LABELS.get(s, s.removeprefix("ood_") + " (OOD)")
+        label = TIER_LABELS.get(s, s.removeprefix("ood_") + " (extrapolation)")
         qw = m.get("qw_abs_rel_err_median")
         lines.append(
             f"| {label} | "
@@ -177,17 +192,18 @@ def tier_table(run: dict) -> str:
 # ============================================================================================
 
 def envelope_figure(run: dict, fig_out: Path, guard_factor: float = 2.0) -> float:
-    """Scatter mean rel-L2 vs envelope distance; return the guard threshold.
+    """Plot the error of each case against its envelope distance.
 
-    The guard threshold is the smallest envelope distance at which the
-    binned median error exceeds ``guard_factor`` times the family-holdout
-    median. Cases at distance 0 (inside the box) anchor the baseline.
+    Returns the guard threshold, which is the smallest envelope distance where
+    the binned median error passes ``guard_factor`` times the median of the
+    family holdout. The cases at distance 0, inside the box, set that baseline.
     """
     rows = per_case_table(run)
     in_box = [r for r in rows if r["split"] in ("test", "test_interp")]
     base = float(np.median([r["mean_rL2"] for r in in_box]))
 
-    # binned medians over distance for the trend line and the threshold
+    # medians in bins of distance, which give both the trend line and the
+    # threshold
     out_rows = sorted((r for r in rows if r["dist"] > 0), key=lambda r: r["dist"])
     guard_dist = None
     trend_x, trend_y = [0.0], [base]
@@ -200,7 +216,7 @@ def envelope_figure(run: dict, fig_out: Path, guard_factor: float = 2.0) -> floa
                 continue
             trend_x.append(float((lo + hi) / 2))
             trend_y.append(float(np.median(binned)))
-        # guard threshold: linear interpolation of the first trend crossing
+        # the guard threshold interpolates the first crossing of the trend line
         thresh = guard_factor * base
         for (x0, y0), (x1, y1) in zip(zip(trend_x, trend_y), zip(trend_x[1:], trend_y[1:])):
             if y0 <= thresh < y1:
@@ -211,7 +227,7 @@ def envelope_figure(run: dict, fig_out: Path, guard_factor: float = 2.0) -> floa
     groups = sorted({r["split"] for r in rows})
     for g in groups:
         pts = [r for r in rows if r["split"] == g]
-        label = TIER_LABELS.get(g, g.removeprefix("ood_") + " (OOD)")
+        label = TIER_LABELS.get(g, g.removeprefix("ood_") + " (extrapolation)")
         ax.scatter([r["dist"] for r in pts], [r["mean_rL2"] for r in pts],
                    s=18, alpha=0.7, label=label)
     ax.plot(trend_x, trend_y, "k--", lw=1, label="binned median")
@@ -237,15 +253,16 @@ def envelope_figure(run: dict, fig_out: Path, guard_factor: float = 2.0) -> floa
 
 def main() -> None:
     p = argparse.ArgumentParser(description="slice-count ablation + envelope analysis")
-    p.add_argument("runs", nargs="+", help="run dirs, one per slice count")
+    p.add_argument("runs", nargs="+", help="run directories, one per slice count")
     p.add_argument("--fig-out", default="data/samples/envelope_distance.png")
     p.add_argument("--envelope-m", type=int, default=None,
-                   help="slice count for the tier table + figure (default: best family-holdout)")
+                   help="slice count for the tier table and figure; "
+                        "the default takes the best family holdout")
     p.add_argument("--guard-factor", type=float, default=2.0)
     args = p.parse_args()
 
     runs = [load_run(Path(d)) for d in args.runs]
-    print("## Slice-count ablation (mean rel-L2 per tier)\n")
+    print("## Slice-count ablation (mean relative L2 per tier)\n")
     print(ablation_table(runs))
 
     if args.envelope_m is not None:
@@ -261,8 +278,9 @@ def main() -> None:
 
     kn_near = [r for r in per_case_table(chosen) if r["kn"] > 0.5 * KN_MAX]
     if kn_near:
-        print(f"{len(kn_near)} eval cases sit above Kn {0.5 * KN_MAX} "
-              f"(max {max(r['kn'] for r in kn_near):.4f}); continuum margin is thin there")
+        print(f"{len(kn_near)} evaluation cases sit above Kn {0.5 * KN_MAX} "
+              f"(largest {max(r['kn'] for r in kn_near):.4f}); "
+              f"the continuum margin is thin there")
 
 
 if __name__ == "__main__":

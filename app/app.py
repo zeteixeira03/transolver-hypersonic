@@ -1,10 +1,11 @@
 """Streamlit dashboard for the hypersonic sphere-cone flow surrogate.
 
-Four sliders drive a live deep-ensemble prediction of the steady flow field
-around an axisymmetric re-entry capsule, with an uncertainty-aware
-trust/warn/refuse verdict and two analytical cross-checks. One prediction
-meshes the geometry and runs five Transolver members on CPU, so it takes
-tens of seconds; the run button gates it behind a spinner.
+Four sliders drive a deep-ensemble prediction of the steady flow field around
+an axisymmetric re-entry capsule. The page reports the field, a verdict of
+trust, warn or refuse that reads the ensemble uncertainty, and two analytical
+cross-checks. One prediction meshes the geometry and runs five Transolver
+members on the processor, which takes tens of seconds, so the run button holds
+it behind a spinner.
 """
 from __future__ import annotations
 
@@ -32,7 +33,7 @@ from inference import (
 #                                       page config
 # ============================================================================================
 
-st.set_page_config(page_title="Hypersonic sphere-cone surrogate", page_icon="🛰️", layout="wide")
+st.set_page_config(page_title="Hypersonic sphere-cone surrogate", layout="wide")
 
 FIELD_META = {
     "T": ("Temperature", "K", False),
@@ -42,15 +43,16 @@ FIELD_META = {
     "v": ("Radial velocity", "m/s", False),
 }
 DECISION_STYLE = {
-    "trust": ("✅ Trust", "#1a7f37", "Inputs sit inside the validated envelope and the "
+    "trust": ("Trust", "#1a7f37", "Inputs sit inside the validated envelope and the "
               "ensemble agrees. Prediction is usable."),
-    "warn": ("⚠️ Warn", "#9a6700", "Ensemble spread is elevated. Treat the field as "
+    "warn": ("Warn", "#9a6700", "Ensemble spread is elevated. Treat the field as "
              "indicative, not quantitative."),
-    "refuse": ("⛔ Refuse", "#cf222e", "Inputs fall outside the validated envelope or the "
+    "refuse": ("Refuse", "#cf222e", "Inputs fall outside the validated envelope or the "
                "ensemble disagrees strongly. Run a full simulation instead."),
 }
 
-# nominal training box per exposed control, for the live per-slider OOD indicator
+# the training box per exposed control, which drives the indicator under each
+# slider
 ENVELOPE_BOX = {
     "mach": (8.0, 25.0),
     "altitude": (45.0, 60.0),
@@ -58,7 +60,7 @@ ENVELOPE_BOX = {
     "theta_c": (35.0, 70.0),
 }
 
-# injected once; drives the flashing OOD chip
+# injected once. it drives the flashing chip that marks a slider outside the box.
 OOD_CSS = """
 <style>
 @keyframes oodflash {
@@ -77,12 +79,12 @@ OOD_CSS = """
 
 
 def envelope_chip(value: float, lo: float, hi: float, unit: str = "") -> str:
-    """A flashing 'out of envelope' chip when the value leaves the training box."""
+    """Return a flashing chip when the value leaves the training box, else a calm one."""
     if value < lo:
-        return f'<div class="ood-chip">⚠ OUT OF ENVELOPE — below {lo:g}{unit}</div>'
+        return f'<div class="ood-chip">OUT OF ENVELOPE, below {lo:g}{unit}</div>'
     if value > hi:
-        return f'<div class="ood-chip">⚠ OUT OF ENVELOPE — above {hi:g}{unit}</div>'
-    return f'<div class="ok-chip">in envelope ({lo:g}–{hi:g}{unit})</div>'
+        return f'<div class="ood-chip">OUT OF ENVELOPE, above {hi:g}{unit}</div>'
+    return f'<div class="ok-chip">in envelope ({lo:g} to {hi:g}{unit})</div>'
 
 
 @st.cache_resource
@@ -92,10 +94,10 @@ def get_ensemble():
 
 @st.cache_data(show_spinner=False)
 def cached_predict(R_n_mm: float, theta_c: float, mach: float, altitude: float):
-    """Cache by rounded slider values so re-selecting a field is instant."""
+    """Cache on the rounded slider values, so a change of field costs nothing."""
     pred = predict(get_ensemble(), R_n=R_n_mm / 1000.0, theta_c_deg=theta_c,
                    mach=mach, altitude_km=altitude)
-    # return a plain dict so Streamlit can hash/cache it
+    # a plain dict, because Streamlit hashes the return value to cache it
     return {
         "coords": pred.coords, "fields": pred.fields, "n_nodes": pred.n_nodes,
         "spread": pred.spread, "distance": pred.distance, "kn": pred.kn,
@@ -110,7 +112,7 @@ def cached_predict(R_n_mm: float, theta_c: float, mach: float, altitude: float):
 def field_figure(coords: np.ndarray, values: np.ndarray, name: str, R_b: float) -> plt.Figure:
     label, unit, log = FIELD_META[name]
     x, r = coords[:, 0], coords[:, 1]
-    # mirror the upper-half solution across the axis for a full-body view
+    # mirror the upper half across the axis, so the figure shows the whole body
     xx = np.concatenate([x, x])
     rr = np.concatenate([r, -r])
     vv = np.concatenate([values, values])
@@ -130,9 +132,10 @@ def field_figure(coords: np.ndarray, values: np.ndarray, name: str, R_b: float) 
     cb = fig.colorbar(cf, ax=ax, shrink=0.9)
     cb.set_label(f"{label} [{unit}]")
     ax.set_aspect("equal")
-    # crop to the near-body region: the domain extends ~8 R_b into the far-field,
-    # so the full frame is mostly undisturbed freestream. x_base is the foremost
-    # extent of the mesh downstream; frame a few base-radii around the forebody.
+    # crop to the region near the body. the domain reaches about 8 R_b into the
+    # far field, so most of a full frame would be undisturbed freestream. x_base
+    # is the downstream end of the mesh, and the window holds a few base radii
+    # around the forebody.
     x_base = float(x.max())
     ax.set_xlim(x_base - 1.15 * R_b, x_base + 0.05 * R_b)
     ax.set_ylim(-1.2 * R_b, 1.2 * R_b)
@@ -186,11 +189,12 @@ st.markdown(
     "A Transolver deep ensemble predicts the steady laminar flow field around an "
     "axisymmetric re-entry capsule, trained on SU2 axisymmetric Navier-Stokes ground "
     "truth. Move the sliders, run a prediction, and read the uncertainty verdict. "
-    "One prediction meshes the body and runs five members on CPU: expect under a minute."
+    "One prediction meshes the body and runs five members on the processor, "
+    "which takes under a minute."
 )
 
 if run:
-    with st.spinner("Meshing geometry and running the five-member ensemble on CPU..."):
+    with st.spinner("Meshing the geometry and running the five-member ensemble..."):
         st.session_state["pred"] = cached_predict(round(R_n_mm, 1), round(theta_c, 1),
                                                    round(mach, 1), round(altitude, 1))
 
@@ -244,10 +248,10 @@ with right:
         p = pred["params"]
         st.info(
             "Placeholder only: this demo does not run SU2 and nothing is submitted "
-            "anywhere. In a deployed system this button would hand off the case below "
-            "to the offline CFD pipeline (an SU2 axisymmetric Navier-Stokes run), which "
-            "is the trusted fallback when a case is refuse-flagged or high-stakes. "
-            "The surrogate above is the instant estimate.\n\n"
+            "anywhere. In a deployed system this button would hand the case below to "
+            "the offline simulation pipeline, an SU2 axisymmetric Navier-Stokes run. "
+            "That pipeline is the trusted answer when a case is refused or when the "
+            "stakes are high. The surrogate above is the instant estimate.\n\n"
             f"Case: R_n={p['R_n']*1e3:.1f} mm, θ_c={p['theta_c_deg']:.1f}°, M={p['mach']:.1f}, "
             f"T∞={p['T_inf']:.0f} K, p∞={p['p_inf']:.1f} Pa, T_w={p['T_w']:.0f} K."
         )

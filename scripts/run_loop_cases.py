@@ -1,23 +1,24 @@
 """Run the active-learning loop cases through SU2.
 
-Takes the batch selected by ``scripts/acquire_loop.py``, appends the cases to
-the sweep ledger tagged ``group_name='loop'`` (new case ids after the sweep,
-each its own geometry so no warm-start clustering), and drives them through the
-same two-pass SU2 recipe the sweep used by reusing the generation workers. Every
-other ledger row is already terminal, so the workers solve exactly the loop
-cases.
+The script takes the batch that ``scripts/acquire_loop.py`` selected and
+appends it to the sweep ledger under ``group_name='loop'``. Each appended case
+takes a case id past the end of the sweep and a geometry of its own, so no case
+warm-starts from another. The generation workers then solve them through the
+same two-pass SU2 recipe as the sweep. Every other row in the ledger has already
+reached a terminal state, so the workers touch the loop cases alone.
 
-A loop case is judged the same way every sweep case was: it must complete and
-clear the catastrophic-collapse thresholds; the three analytical gates are
-recorded as advisory rel-errors, not a pass/fail bar. Failures are logged and
-left in the ledger as failed, not rescued.
+A loop case is judged exactly as a sweep case was. It must finish, and it must
+clear the thresholds that catch a collapsed field. The three analytical gates
+are recorded as relative errors and advise rather than decide. A failure is
+logged and left in the ledger as failed.
 
-Run from the project root (Windows host auto-routes SU2 through WSL)::
+Run it from the project root. On a Windows host SU2 goes through the Windows
+Subsystem for Linux without further setup::
 
     python scripts/run_loop_cases.py --workers 4
 
-The loop tensors land in ``data/raw/sweep/case_0780/`` onward alongside the
-sweep, so the training split picks them up (routed to train by group_name).
+The tensors land in ``data/raw/sweep/case_0780/`` and onward, beside the sweep,
+where ``group_name`` routes them into the training split.
 """
 from __future__ import annotations
 
@@ -41,11 +42,12 @@ LOOP_GROUP = "loop"
 
 def append_loop_rows(db_path: Path, selected: list[dict],
                      first_case_id: int, first_geom_id: int) -> list[int]:
-    """Insert the selected cases as pending loop rows. Idempotent by case_id.
+    """Insert the selected cases as pending loop rows.
 
-    Each case gets its own geom_id (no warm-start clustering across the diverse
-    acquired geometries) and restart_from NULL (cold solve). Returns the case
-    ids that are pending after the call.
+    A second call adds nothing, because a row whose ``case_id`` exists is left
+    alone. Each case takes its own ``geom_id`` and a NULL ``restart_from``, so
+    every one solves cold. The acquired geometries are spread across the box and
+    would gain nothing from a shared mesh. Returns the case ids now pending.
     """
     con = L.connect(db_path)
     ids = []
@@ -70,7 +72,7 @@ def append_loop_rows(db_path: Path, selected: list[dict],
 
 
 def report(db_path: Path, ids: list[int]) -> None:
-    """Print the terminal state and advisory gate rel-errors for each loop case."""
+    """Print the final state and the advisory gate results for each loop case."""
     print("\n=== loop case outcomes ===")
     print("| case | status | M | R_n mm | theta_c | qw | p02 | standoff mm | gates |")
     print("|------|--------|---|--------|---------|----|----|-------------|-------|")
@@ -105,8 +107,9 @@ def main() -> None:
     counts = L.status_counts(db_path)
     print(f"[loop] ledger now {dict(counts)}; loop case ids {ids[0]}..{ids[-1]}")
 
-    # reuse the sweep generation workers: build a full args namespace from the
-    # generate_dataset parser (all solver knobs at their sweep defaults) and run
+    # reuse the sweep generation workers. the parser of generate_dataset builds a
+    # complete argument namespace, which holds every solver setting at the value
+    # the sweep used.
     gen_args = _build_parser().parse_args([
         "--workdir", str(workdir), "--workers", str(args.workers),
     ])

@@ -1,4 +1,4 @@
-"""SU2 wrapper: cfg rendering, subprocess driver, and output post-processing."""
+"""SU2 wrapper: configuration rendering, the solver driver, and output readers."""
 
 from src.cfd.postprocess import (
     extract_axis_line,

@@ -1,11 +1,13 @@
 """Tests for the SU2 dataset and post-hoc q_w computation.
 
-The synthetic-NPZ tests cover schema, normalization, lazy loading, and the
-reconstruct-pressure helper without depending on any committed sample. The
-canonical-NPZ regression check verifies that
-:func:`src.eval.sanity.compute_q_w_from_T` reproduces the canonical-case SU2
-stagnation heat flux to within 5% on the committed ``canonical_case.npz``,
-which is the load-bearing check for the surrogate eval metric.
+The tests built on synthetic files cover the schema, the normalization, the
+loading of one case at a time, and the pressure helper, and none of them needs a
+committed sample.
+
+One test does. It checks that :func:`src.eval.sanity.compute_q_w_from_T`
+reproduces the stagnation heat flux SU2 measured on the committed
+``canonical_case.npz``, to within 5%. That case carries a fine mesh, and the
+agreement holds only at that resolution.
 """
 
 from __future__ import annotations
@@ -52,7 +54,7 @@ def _synth_case(tmp_path: Path, name: str, n: int = 500, seed: int = 0) -> Path:
     case_dir = tmp_path / name
     case_dir.mkdir()
     path = case_dir / "case.npz"
-    # vary case params across seeds so norm stats have a non-degenerate spread
+    # vary the case parameters between seeds, so the statistics see a real spread
     params = np.array(
         [0.02 + 0.005 * seed, 50.0 + 5.0 * seed, 0.07 + 0.01 * seed,
          0.006 + 0.001 * seed, 8.0 + seed, 220.0 + 10.0 * seed,
@@ -103,7 +105,7 @@ def test_stack_case_features_shapes(tmp_path):
     feats, targets = stack_case_features(case)
     assert feats.shape == (128, INPUT_DIM)
     assert targets.shape == (128, TARGET_DIM)
-    # case params broadcast: every node carries the same 8 trailing values
+    # the case parameters broadcast: every node carries the same 8 trailing values
     assert np.allclose(feats[:, 2:], case["case_params"])
 
 
@@ -116,9 +118,9 @@ def test_stack_case_features_with_p_matches_ideal_gas(tmp_path):
     case = load_case_npz(p)
     _, targets = stack_case_features(case, with_p=True)
     assert targets.shape == (128, TARGET_DIM + 1)
-    # the fifth channel is the EoS pressure of the stored rho and T, so the
-    # free-channel arm is trained against exactly the p the hard arm would
-    # have reconstructed
+    # the fifth channel is the pressure the equation of state gives for the
+    # stored density and temperature, so the free-channel layout trains against
+    # exactly the pressure the default layout would reconstruct
     assert np.allclose(targets[:, 4], case["rho"] * R_SPECIFIC_AIR * case["T"],
                        rtol=1e-5)
     assert np.allclose(targets[:, :4], stack_case_features(case)[1])
@@ -154,7 +156,7 @@ def test_denormalize_round_trips_with_p(tmp_path):
 # ============================================================================================
 
 def test_no_log_targets_round_trips(tmp_path):
-    """The plain-standardization arm must invert without a log10 step."""
+    """The plain-standardization layout must invert with no log10 step."""
     paths = [_synth_case(tmp_path, f"case_{i:04d}", n=200, seed=i) for i in range(3)]
     stats = compute_norm_stats(paths, log_targets=())
     assert not stats.log_mask.any()
@@ -175,7 +177,7 @@ def test_norm_stats_roundtrip_preserves_targets(tmp_path):
 
 
 def test_stats_load_defaults_targets_for_old_checkpoints(tmp_path):
-    """Checkpoints written before the free-pressure arm carry no target list."""
+    """A stats file with no target list must fall back to the four-channel layout."""
     out = tmp_path / "old_stats.pt"
     torch.save({
         "x_mean": torch.zeros(INPUT_DIM), "x_std": torch.ones(INPUT_DIM),
@@ -194,14 +196,16 @@ def test_compute_norm_stats_unit_variance_target(tmp_path):
     stats = compute_norm_stats(paths)
     assert stats.x_mean.shape == (INPUT_DIM,)
     assert stats.x_std.shape == (INPUT_DIM,)
-    # build the pooled training points and confirm normalization lands at 0/1
+    # pool the training points and confirm the normalization lands at mean 0
+    # and standard deviation 1
     feats = np.concatenate(
         [stack_case_features(load_case_npz(p))[0] for p in paths], axis=0,
     )
     targets = np.concatenate(
         [stack_case_features(load_case_npz(p))[1] for p in paths], axis=0,
     )
-    # stats are fit in transformed space (log10 on rho, T by default)
+    # the statistics are fit after the transform, which is log10 on density and
+    # temperature by default
     targets_t = transform_targets(targets, stats.log_targets)
     x_norm = (feats - stats.x_mean.numpy()) / stats.x_std.numpy()
     y_norm = (targets_t - stats.y_mean.numpy()) / stats.y_std.numpy()
@@ -218,7 +222,7 @@ def test_denormalize_round_trips_log_channels(tmp_path):
     item = ds[0]
     recovered = denormalize_targets(item["y"], stats)
     assert torch.allclose(recovered, item["y_raw"], rtol=1e-4, atol=1e-6)
-    # stats survive a save/load cycle with the log flag intact
+    # the statistics survive a save and a load with the log flag intact
     p = tmp_path / "stats.pt"
     stats.save(p)
     loaded = SU2NormStats.load(p)
@@ -235,7 +239,7 @@ def test_su2_dataset_returns_normalized_tensors(tmp_path):
     assert item["x"].shape == (64, INPUT_DIM)
     assert item["y"].shape == (64, TARGET_DIM)
     assert item["pos"].shape == (64, 2)
-    # unnormalized targets recoverable
+    # the targets in physical units are recoverable
     assert item["y_raw"].shape == (64, TARGET_DIM)
     assert item["case_params"].shape == (N_CASE_PARAMS,)
     assert item["name"] == "case_0000"
@@ -260,7 +264,7 @@ def test_list_case_npzs_sorted(tmp_path):
 
 
 def test_list_case_npzs_flat_layout(tmp_path):
-    # kaggle upload layout: case_XXXX.npz at the top level, no subdirs
+    # the Kaggle upload layout: case_XXXX.npz at the top level, no subdirectories
     (tmp_path / "nested").mkdir()
     for i in [3, 1]:
         src = _synth_case(tmp_path / "nested", f"case_{i:04d}")
@@ -289,14 +293,15 @@ def test_reconstruct_pressure_matches_ideal_gas():
 # ============================================================================================
 
 def test_thermal_conductivity_at_T_w_value():
-    # at T_w = 300 K with Pr=0.71 and Sutherland mu, k ~ 0.026 W/(m K) -- the
-    # textbook value for air at room temperature
+    # at T_w = 300 K, with a Prandtl number of 0.71 and Sutherland viscosity,
+    # the conductivity is about 0.026 W/(m K), which is the textbook value for
+    # air at room temperature
     k = thermal_conductivity_air(300.0)
     assert 0.024 < k < 0.029
 
 
 def test_compute_q_w_linear_ramp():
-    """On a synthetic linear T(n) ramp from T_w into the fluid, FD recovers
+    """On a synthetic linear temperature ramp away from the wall, the estimator
     the slope exactly and q_w = k(T_w) * slope.
 
     Geometry: a flat wall at ``x = 0`` extending along ``r`` (wall normal
@@ -307,20 +312,22 @@ def test_compute_q_w_linear_ramp():
     T_w = 300.0
     slope_true = 3.0e7                                  # K/m
 
-    # wall nodes: origin + a column along +r (defines the tangent direction
-    # for the SVD wall-normal estimate -> tangent is r-axis, normal is x-axis)
+    # the wall nodes are the origin and a column of nodes along positive r. that
+    # column sets the tangent direction the singular value decomposition finds,
+    # so the tangent runs along r and the normal along x.
     n_wall_others = 6
     x_wall = np.concatenate([[0.0], np.zeros(n_wall_others)])
     r_wall = np.concatenate([[0.0],
                               np.linspace(1e-5, 6e-5, n_wall_others)])
 
-    # fluid nodes along the inward normal (-x) at the stagnation streamline
+    # fluid nodes along the inward normal, which points along negative x, on the
+    # stagnation streamline
     n_fluid = 8
     d_in = (1 + np.arange(n_fluid)) * 1e-6
     x_fluid = -d_in
     r_fluid = np.zeros(n_fluid)
 
-    # far fluid nodes the algorithm should ignore (large d)
+    # distant fluid nodes, which the estimator must ignore
     x_far = np.array([-0.01, -0.005, -0.02])
     r_far = np.array([0.005, 0.02, 0.01])
 

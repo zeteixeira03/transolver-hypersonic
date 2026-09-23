@@ -1,7 +1,7 @@
 """Parametric axisymmetric sphere-cone geometry and gmsh meshing.
 
-Builds the body curve in the (x, r) half-plane and meshes the exterior fluid
-domain. The body has three segments:
+The module builds the body curve in the (x, r) half-plane and meshes the
+exterior fluid domain around it. The body has three segments:
 
     sphere arc (P0 -> P1)  ->  cone segment (P1 -> P2)  ->  shoulder arc (P2 -> P3)
 
@@ -13,15 +13,15 @@ The fluid domain is bounded by:
 - FARFIELD: upstream vertical inlet + outboard horizontal top
 - OUTLET:   vertical line at the base plane (x = P3.x) from P3 up to the top
 
-Both arc and tangent geometry are computed analytically from
-(R_n, theta_c, R_b, R_s):
+Closed-form expressions in (R_n, theta_c, R_b, R_s) give every arc and every
+tangent point, so no numerical root find is needed:
 
-- Sphere-cone tangent: where the sphere outward normal makes angle theta_c
-  with the axis. P1 = (R_n (1 - sin theta_c), R_n cos theta_c).
-- Cone-shoulder tangent: the shoulder is a circular arc of radius R_s with
-  center at r = R_b - R_s, tangent to the cone on the upstream side and
-  tangent to the vertical base plane on the downstream side. Top of the
-  shoulder sits at (x_shoulder_center, R_b) = P3.
+- Sphere-cone tangent: the point where the outward normal of the sphere makes
+  the angle theta_c with the axis. P1 = (R_n (1 - sin theta_c), R_n cos theta_c).
+- Cone-shoulder tangent: the shoulder is a circular arc of radius R_s. Its
+  center sits at r = R_b - R_s. The arc meets the cone tangentially upstream
+  and the vertical base plane tangentially downstream. The top of the shoulder
+  sits at (x_shoulder_center, R_b) = P3.
 """
 
 from __future__ import annotations
@@ -72,8 +72,9 @@ def sphere_cone_points(
     # sphere-cone tangent point
     P1 = (R_n * (1.0 - math.sin(theta)), R_n * math.cos(theta))
 
-    # cone-shoulder tangent point: shoulder center at r = R_b - R_s, tangent
-    # to cone (slope tan theta) means tangent point r = R_b - R_s (1 - cos theta)
+    # cone-shoulder tangent point. the shoulder center sits at r = R_b - R_s,
+    # and tangency with a cone of slope tan theta puts the tangent point at
+    # r = R_b - R_s (1 - cos theta)
     P2_r = R_b - R_s * (1.0 - math.cos(theta))
     if P2_r <= P1[1]:
         raise ValueError(
@@ -134,12 +135,12 @@ def mesh_sphere_cone(
     h_far : float, optional
         Target characteristic element size at the far-field. Default L_far / 25.
     bl_first_height : float, optional
-        Boundary-layer first cell height (wall-normal), m. Default R_n / 5000,
-        targeting a y+ ~ O(1) for cold-wall Mach 10 conditions; tune per case.
+        Height of the first cell normal to the wall, m. The default R_n / 5000
+        holds y+ near 1 for a cold wall at Mach 10. Tune it per case.
     bl_thickness : float, optional
         Boundary-layer total thickness, m. Default 0.25 R_n.
     bl_ratio : float
-        BL cell-height growth ratio. Default 1.2.
+        Growth ratio of the cell height through the boundary layer. Default 1.2.
     refine_shock_box : bool
         If True, add an extra size-field refinement disc centered on the nose
         to resolve the expected bow-shock region.
@@ -172,9 +173,9 @@ def mesh_sphere_cone(
 
     import gmsh  # imported lazily; not needed by sphere_cone_points
 
-    # interruptible=False skips gmsh's SIGINT handler, which requires the main
-    # thread; without it meshing raises when called from a worker thread (e.g.
-    # the Streamlit dashboard)
+    # gmsh installs an interrupt-signal handler that only the main thread can
+    # register. interruptible=False skips it, which is what lets a worker thread
+    # mesh without an exception
     gmsh.initialize(interruptible=False)
     try:
         gmsh.option.setNumber("General.Terminal", 0)
@@ -245,9 +246,9 @@ def mesh_sphere_cone(
         field_list = [2]
 
         if refine_shock_box:
-            # additional refinement disc centered on the stagnation point so the
-            # bow shock (expected at ~0.14 R_n upstream) and the shock layer are
-            # well-resolved
+            # a second refinement disc centered on the stagnation point. it
+            # resolves the shock layer and the bow shock, which stands about
+            # 0.14 R_n upstream of the nose
             gmsh.model.mesh.field.add("Distance", 3)
             gmsh.model.mesh.field.setNumbers(3, "PointsList", [p_stag])
             gmsh.model.mesh.field.add("Threshold", 4)

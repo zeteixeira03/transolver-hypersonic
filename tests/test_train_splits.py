@@ -1,9 +1,9 @@
 """Tests for train.py split_paths, especially loop-group routing.
 
-The active-learning loop appends new cases with ``group_name='loop'`` to the
-dataset. The core val/test/interp membership must stay byte-identical for the
-same seed regardless of how many loop cases are present, so before/after
-comparisons across loop iterations are legitimate.
+The active-learning loop appends cases under ``group_name='loop'``. At one seed
+the core validation, test and interpolation tiers must hold the same cases
+however many loop cases exist. Only then does a comparison across loop
+iterations mean anything.
 """
 
 from __future__ import annotations
@@ -73,7 +73,7 @@ def test_core_splits_identical_with_and_without_loop_cases():
 
 def test_loop_cases_deterministic_order_in_train():
     core_ids = list(range(30))
-    loop_ids = [905, 902, 908, 900]  # unsorted on purpose
+    loop_ids = [905, 902, 908, 900]  # out of order, to prove the split sorts them
     geoms = {c: c // 10 for c in core_ids}
     paths = _fake_paths(core_ids + loop_ids)
     groups = {**{c: "core" for c in core_ids}, **{c: "loop" for c in loop_ids}}
@@ -81,7 +81,7 @@ def test_loop_cases_deterministic_order_in_train():
     train_names = [p.parent.name for p in splits["train"]]
     loop_positions = [train_names.index(f"case_{c:04d}") for c in sorted(loop_ids)]
     assert loop_positions == sorted(loop_positions), "loop cases not in case_id order"
-    # loop cases occupy the tail of the train list, contiguous
+    # the loop cases sit together at the end of the training list
     tail = train_names[-len(loop_ids):]
     assert tail == [f"case_{c:04d}" for c in sorted(loop_ids)], (
         f"loop cases should be at the tail of train in case_id order; got tail={tail}"

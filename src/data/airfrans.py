@@ -1,22 +1,22 @@
 """
 AirfRANS dataset wrapper for stack validation.
 
-The official `airfrans` pip package returns one numpy array per simulation of
-shape (N, 12) with the following column layout (verified against the package
-source at github.com/Extrality/airfrans_lib):
+The official `airfrans` package returns one array per simulation, of shape
+(N, 12). The column layout below is the one in the package source at
+github.com/Extrality/airfrans_lib:
 
-    cols  0..1   position (x, y) in meters
-    cols  2..3   inlet velocity (vx, vy), replicated per point
-    col   4      signed distance to the airfoil
-    cols  5..6   surface normals (zero off the airfoil)
-    cols  7..8   target velocity (u, v)
-    col   9      target pressure / specific_mass
-    col  10      target turbulent kinematic viscosity
-    col  11      surface flag (1 if point lies on the airfoil)
+    columns  0..1   position (x, y) in metres
+    columns  2..3   inlet velocity (vx, vy), repeated at every point
+    column   4      signed distance to the airfoil
+    columns  5..6   surface normals, zero away from the airfoil
+    columns  7..8   target velocity (u, v)
+    column   9      target pressure divided by specific mass
+    column  10      target turbulent kinematic viscosity
+    column  11      surface flag, 1 where the point lies on the airfoil
 
-Inputs to the model are columns 0..6 (7 channels). Targets are columns 7..10
-(4 channels). The surface flag drives the surface-weighted loss term and the
-Cp acceptance figure.
+The model reads columns 0 to 6, which is 7 channels, and predicts columns 7 to
+10, which is 4. The surface flag drives both the surface term of the loss and
+the pressure-coefficient acceptance figure.
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ INLET_COLS = slice(2, 4)
 # ============================================================================================
 @dataclass
 class NormStats:
-    """Per-channel mean and std for inputs and targets."""
+    """Per-channel mean and standard deviation for the inputs and targets."""
 
     x_mean: torch.Tensor  # (7,)
     x_std: torch.Tensor   # (7,)
@@ -61,14 +61,13 @@ class NormStats:
 
 
 def compute_norm_stats(arrays: list[np.ndarray]) -> NormStats:
-    """Compute per-channel mean/std across all training points using parallel
-    Welford accumulation. Constant peak memory in the number of cases.
+    """Per-channel mean and standard deviation over every training point.
 
-    The previous implementation concatenated every array into one tensor
-    before calling .std(), which peaked at roughly 4x the dataset size and
-    OOM'd Colab's 12 GB on AirfRANS scarce. The parallel-Welford merge
-    formula combines per-case (mean, M2, count) summaries without ever
-    holding the full point set in memory.
+    The parallel form of the Welford update merges the per-case
+    ``(mean, M2, count)`` summaries, so peak memory does not grow with the
+    number of cases. Memory is the reason for it. One concatenated tensor over
+    the whole point set peaks near four times the size of the dataset, which
+    exceeds the 12 GB a free Colab session offers on the scarce task.
     """
     n_total = 0
     mean_acc: np.ndarray | None = None
@@ -97,11 +96,11 @@ def compute_norm_stats(arrays: list[np.ndarray]) -> NormStats:
     eps = 1e-8
     x_mean = mean_acc[INPUT_COLS].copy()
     x_std = std[INPUT_COLS].copy() + eps
-    # surface normals (cols 5, 6 in the raw arr -> input indices 5, 6) are
-    # zero off-surface and unit on-surface, so their fitted std is tiny and
-    # mean/std normalization blows them up to ~12-15 sigma on the airfoil.
-    # Activations downstream then drift to inf within a few epochs. Leave
-    # them at their native [-1, 1] scale instead.
+    # the surface normals sit at input indices 5 and 6. they are zero away from
+    # the airfoil and unit on it, so their fitted standard deviation is tiny and
+    # standardization would push the on-airfoil values to 12 or 15 sigma. the
+    # activations that follow then reach infinity within a few epochs. keep
+    # these two channels at their native [-1, 1] scale.
     x_mean[5:7] = 0.0
     x_std[5:7] = 1.0
     return NormStats(
@@ -117,20 +116,21 @@ def compute_norm_stats(arrays: list[np.ndarray]) -> NormStats:
 # ============================================================================================
 class AirfRANSDataset(Dataset):
     """
-    Each item is a single simulation, optionally subsampled to a fixed number
-    of points. Returned tensors are normalized on the fly using `stats`.
+    One item is one simulation, drawn down to a fixed number of points when
+    asked. ``stats`` normalizes the returned tensors.
 
     Parameters
     ----------
     arrays : list of np.ndarray
-        One (N_i, 12) array per simulation, as returned by airfrans.dataset.load.
+        One array of shape (N_i, 12) per simulation, as airfrans.dataset.load
+        returns them.
     names : list of str
-        Simulation names, kept for evaluation/plotting.
+        Simulation names, kept for evaluation and for the figures.
     stats : NormStats
         Normalization statistics computed on the training split.
     subsample : int, optional
-        If given, randomly draw this many points per __getitem__ call.
-        Subsampling reseeds per call so each epoch sees a fresh subset.
+        Draw this many points at random per call to ``__getitem__``. Each call
+        draws again, so every epoch sees a different subset.
     """
 
     def __init__(
@@ -182,11 +182,12 @@ def load_split(
     task: str = "scarce",
     train: bool = True,
 ) -> tuple[list[np.ndarray], list[str]]:
-    """Thin wrapper around airfrans.dataset.load that returns plain lists.
+    """Load one split through airfrans.dataset.load and return plain lists.
 
-    Cast to float32 on load. The package returns float64, which doubles the
-    peak system-RAM footprint on Colab for no model-side benefit (training
-    runs in float32 or AMP).
+    The package hands back float64 arrays, and the cast to float32 here halves
+    the peak memory a free Colab session must hold. The model gains nothing
+    from the extra precision, because training runs in float32 or in mixed
+    precision.
     """
     import airfrans as af
 
