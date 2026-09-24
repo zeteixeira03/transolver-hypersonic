@@ -21,6 +21,7 @@ and ``conda_env``. Dataset generation on Kaggle takes the direct path.
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -53,9 +54,12 @@ def render_cfg(
     volume_name: str = "flow",
     surface_name: str = "surface_flow",
     restart_name: str = "restart_flow",
+    settings: dict[str, str] | None = None,
 ) -> Path:
     """Substitute concrete case values into the SU2 configuration template.
 
+    ``settings`` then sets any further SU2 option, as ``{"KEY": "value"}``: an
+    existing ``KEY=`` line is replaced, and a missing one is appended.
     Returns the path of the written configuration file.
     """
     text = Path(template_path).read_text()
@@ -77,6 +81,11 @@ def render_cfg(
     }
     for key, value in replacements.items():
         text = text.replace(key, value)
+    for key, value in (settings or {}).items():
+        line = f"{key}= {value}"
+        text, n = re.subn(rf"(?m)^{re.escape(key)}\s*=.*$", line, text)
+        if n == 0:
+            text += f"\n{line}\n"
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(text)
@@ -223,6 +232,7 @@ def run_case(
     write_mesh: bool = True,
     log_filename: str = "su2.log",
     cfg_filename: str = "case.cfg",
+    settings: dict[str, str] | None = None,
 ) -> dict:
     """Run one sphere-cone hypersonic case from parameters to output files.
 
@@ -279,6 +289,7 @@ def run_case(
         restart_sol=restart_sol,
         mglevel=mglevel,
         conv_minval=conv_minval,
+        settings=settings,
     )
 
     result = run_su2(

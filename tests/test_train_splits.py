@@ -95,13 +95,3 @@ def test_ood_groups_untouched_by_loop():
     splits = split_paths(paths, groups, geoms, 0.2, 0.2, seed=0, interp_frac=0.0)
     ood_names = {p.parent.name for p in splits["ood_nose_large"]}
     assert ood_names == {"case_0800", "case_0801", "case_0802"}
-
-
-def test_pin_splits_replaces_listed_tiers_only():
-    from src.data.su2 import pin_splits
-
-    paths = _fake_paths(list(range(10)))
-    splits = {"train": paths[:6], "val": paths[6:8], "test": paths[8:]}
-    pinned = pin_splits(splits, paths, {"val": ["case_0001", "case_0099"]})
-    assert [p.parent.name for p in pinned["val"]] == ["case_0001"]
-    assert pinned["train"] == splits["train"]

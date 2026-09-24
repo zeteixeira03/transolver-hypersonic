@@ -282,8 +282,9 @@ the resolution of the sweep. It stays a valid relative comparison, because the
 predicted field and the true field pass through the same estimator, and it is
 not a physical heat flux. Do not read the two numbers as one quantity.
 
-Reproduce the table with `scripts/prior_ablation.py`, which builds the pinned
-split and renders the result from the committed per-run records.
+Every table in this section rebuilds from the per-run records committed in
+`results/`. `python scripts/check_reproduces.py` regenerates them into
+`results/reproduced.md` and fails if any row here differs.
 
 ## Validation on AirfRANS
 
@@ -413,10 +414,13 @@ scripts/
   run_loop_cases.py        # drives the acquired cases through SU2
   loop_report.py           # before-and-after report for the loop iteration
   prior_ablation.py        # physics-prior split builder and results table
+  run_cases.py             # resumable SU2 job runner, used for the solver study
+  check_reproduces.py      # rebuilds every results table and checks this README
 notebooks/
   01_validate_stack.ipynb  # AirfRANS validation, Kaggle orchestrator
   02_train_su2.ipynb       # SU2 training runs, Kaggle orchestrator
 data/samples/              # committed example outputs: figures and one case
+results/                   # per-run evaluation records behind every results table
 ```
 
 ## License

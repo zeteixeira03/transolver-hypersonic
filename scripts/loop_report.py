@@ -48,7 +48,7 @@ from scipy.stats import spearmanr, wilcoxon
 
 from src.cfd.ledger import read_cases
 from src.data.sampler import FS_BOX, GEOM_BOX, us_standard_atmosphere
-from src.data.su2 import CASE_PARAM_ORDER, case_name, list_case_npzs, split_paths
+from src.data.su2 import CASE_PARAM_ORDER, case_name, split_paths
 from src.eval.metrics import channel_mean, tier_label, tiers_present
 
 # ============================================================================================
@@ -148,7 +148,7 @@ def nearest_loop_distance(recs: list[dict], loop_pts: np.ndarray) -> np.ndarray:
     return np.linalg.norm(X[:, None, :] - loop_pts[None, :, :], axis=2).min(axis=1)
 
 
-def pre_loop_train_points(workdir: Path, seed: int = 0) -> np.ndarray:
+def pre_loop_train_points(ledger: Path, seed: int = 0) -> np.ndarray:
     """Normalized coordinates of the training cases that predate the loop.
 
     These points give the distance bins a scale to sit against. A held-out case
@@ -157,8 +157,8 @@ def pre_loop_train_points(workdir: Path, seed: int = 0) -> np.ndarray:
 
     Parameters
     ----------
-    workdir : pathlib.Path
-        Dataset directory holding the case tensors and ledger.db.
+    ledger : pathlib.Path
+        The dataset ledger. Only case names, groups and geometries are read.
     seed : int
         Split seed. It must match the one both ensembles trained under.
 
@@ -167,8 +167,10 @@ def pre_loop_train_points(workdir: Path, seed: int = 0) -> np.ndarray:
     numpy.ndarray
         Array of shape (n_train_pre_loop, 6).
     """
-    rows = read_cases(workdir / "ledger.db")
-    splits = split_paths(list_case_npzs(workdir), {c: r["group_name"] for c, r in rows.items()},
+    rows = read_cases(ledger)
+    # the split needs case names only, so the ledger stands in for the case files
+    done = [Path(f"case_{c:04d}.npz") for c, r in rows.items() if r["status"] == "done"]
+    splits = split_paths(done, {c: r["group_name"] for c, r in rows.items()},
                          {c: int(r["geom_id"]) for c, r in rows.items()}, 0.1, 0.1, seed, 0.1)
     params = {f"case_{c:04d}": {k: r[k] for k in CASE_PARAM_ORDER} for c, r in rows.items()
               if r["status"] == "done" and r["group_name"] != "loop"}
@@ -362,18 +364,16 @@ def main() -> None:
     p = argparse.ArgumentParser(description="active-learning loop before/after report")
     p.add_argument("--before", default="data/processed/ensemble_v2/ensemble_per_case.json")
     p.add_argument("--after", default="data/processed/ensemble_v3/ensemble_per_case.json")
-    p.add_argument("--workdir", default="data/raw/sweep",
-                   help="dataset workdir with case npzs and ledger.db")
+    p.add_argument("--ledger", default="results/ledger.db")
     p.add_argument("--out", default="data/processed/loop/loop_report")
     p.add_argument("--fig-out", default="data/samples/loop_neighborhood.png")
     args = p.parse_args()
 
-    workdir = Path(args.workdir)
     before = json.loads(Path(args.before).read_text())
     after = json.loads(Path(args.after).read_text())
     paired = pair_records(before, after)
-    loop_pts = load_loop_points(workdir / "ledger.db")
-    train_pts = pre_loop_train_points(workdir)
+    loop_pts = load_loop_points(Path(args.ledger))
+    train_pts = pre_loop_train_points(Path(args.ledger))
     print(f"[loop] {len(loop_pts)} acquired cases, {len(train_pts)} pre-loop "
           f"training cases, {len(paired)} paired eval cases")
 

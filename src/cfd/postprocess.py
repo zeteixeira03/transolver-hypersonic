@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from src.cfd.runner import Case
+from src.eval.sanity import compare_to_analytical
 
 # ============================================================================================
 #                                       surface read
@@ -398,3 +399,37 @@ def extract_training_tensors(
     if save_npz is not None:
         np.savez_compressed(save_npz, **out)
     return out
+
+
+# ============================================================================================
+#                                       one solved case
+# ============================================================================================
+
+def measure_case(run_dir: str | Path, case: Case) -> dict:
+    """Measure stagnation heat flux, stagnation pressure and shock standoff of a solved case.
+
+    Every stagnation value comes from just off the axis, at 5% of the nose
+    radius, where the axisymmetric source term no longer inflates it. The
+    function raises when no shock is found on the stagnation line, because such
+    a field has a collapsed or missing bow shock and no number from it is valid.
+
+    Returns ``qw``, ``p02`` and ``standoff`` in SI units, plus ``summary``, the
+    comparison against the analytical correlations.
+    """
+    run_dir = Path(run_dir)
+    stag = stagnation_values(extract_surface(run_dir / "surface_flow.vtu"),
+                             y_axis_skip=0.05 * case.R_n, n_average=3)
+    axis = extract_axis_line(run_dir / "flow.vtu", x_in=-8.0 * case.R_b, x_nose=0.0,
+                             n=2000, r_offset=0.05 * case.R_n)
+    shock = find_shock_standoff(axis, p_inf=case.p_inf)
+    if not shock.get("valid", not np.isnan(shock["standoff"])):
+        raise RuntimeError("no bow shock on the stagnation line; the field is broken")
+    qw = float(abs(stag.get("qw", np.nan)))
+    p02 = shock.get("p_post_plateau", np.nan)
+    p02 = float(stag.get("p", np.nan) if np.isnan(p02) else p02)
+    delta = float(shock["standoff"])
+    summary = compare_to_analytical(
+        M_inf=case.mach, T_inf=case.T_inf, p_inf=case.p_inf, R_n=case.R_n, T_w=case.T_w,
+        su2_qw=qw, su2_p02=p02, su2_standoff=delta, theta_c_deg=case.theta_c_deg,
+    )
+    return {"qw": qw, "p02": p02, "standoff": delta, "summary": summary}

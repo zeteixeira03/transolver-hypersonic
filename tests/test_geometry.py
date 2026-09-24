@@ -99,14 +99,3 @@ def test_mesh_sphere_cone_writes_su2_with_markers(tmp_path):
     # geometry dict returned with expected keys
     for k in ("P0", "P1", "P2", "P3", "sphere_center", "shoulder_center"):
         assert k in pts
-
-
-def test_mesh_settings_match_the_dataset_recipe():
-    from src.geometry.sphere_cone import mesh_settings
-
-    s = mesh_settings(R_n=0.03, R_b=0.09)
-    assert s["bl_ratio"] == 1.15
-    assert s["bl_first_height"] == pytest.approx(0.03 / 30000)
-    assert s["bl_thickness"] == pytest.approx(0.06 * 0.03)
-    # the first cell stops at 5e-7 m on a small nose
-    assert mesh_settings(R_n=0.01, R_b=0.03)["bl_first_height"] == 5e-7

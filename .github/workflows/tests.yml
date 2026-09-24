@@ -23,3 +23,5 @@ jobs:
         run: pip install -e ".[cfd,dev]"
       - name: Run test suite
         run: pytest tests/ -q
+      - name: Check that every README result table reproduces
+        run: python scripts/check_reproduces.py
