@@ -4,11 +4,13 @@ Turn the four dashboard controls into an ensemble prediction of the flow.
 :func:`predict` meshes the geometry with the recipe that produced the training
 data, runs every ensemble member on the mesh nodes, and returns the mean fields,
 the spread, the shock standoff with its band across members, and the decision to
-trust, warn or refuse. Meshing at full resolution takes most of the time.
+trust, warn or refuse. Meshing takes most of the time, so the geometry is
+meshed once per cone half-angle and scaled to each nose radius.
 """
 
 from __future__ import annotations
 
+import functools
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +35,12 @@ ENSEMBLE_DIR = Path(__file__).resolve().parents[1] / "data/processed/ensemble_v3
 # controls without a slider sit near the middle of the training box
 R_B_RATIO = 3.0     # R_b / R_n
 R_S_RATIO = 0.10    # R_s / R_b
+
+# every length of the mesh recipe scales with R_n once the 5e-7 m floor on the
+# first cell stops binding, at R_n = 15 mm. from there up, a mesh is a scaled
+# copy of the one at 15 mm: meshes at 20 and 40 mm agree to 0.05% in node count
+# and 0.03% in node spacing, which is the spread between two meshings of one case
+SCALE_FROM = 0.015  # m
 
 
 def load_default_ensemble(device: str = "cpu") -> tuple[Ensemble, dict[str, float]]:
@@ -88,11 +96,21 @@ class Prediction:
     params: dict[str, float]
 
 
+@functools.cache
+def template_nodes(theta_c_deg: float) -> np.ndarray:
+    """Mesh nodes at R_n = ``SCALE_FROM`` for one cone half-angle, meshed once per process."""
+    R_b = R_B_RATIO * SCALE_FROM
+    return mesh_nodes(SCALE_FROM, theta_c_deg, R_b, R_S_RATIO * R_b)
+
+
 def predict(ens: Ensemble, thresholds: dict[str, float], R_n: float, theta_c_deg: float,
             mach: float, altitude_km: float, device: str = "cpu") -> Prediction:
     """Mesh the geometry, run the ensemble, and decide whether to trust the result."""
     params = case_params(R_n, theta_c_deg, R_B_RATIO, R_S_RATIO, mach, altitude_km)
-    coords = mesh_nodes(R_n, theta_c_deg, params["R_b"], params["R_s"])
+    if R_n < SCALE_FROM:
+        coords = mesh_nodes(R_n, theta_c_deg, params["R_b"], params["R_s"])
+    else:
+        coords = template_nodes(theta_c_deg) * (R_n / SCALE_FROM)
     members = predict_on_nodes(ens, coords, params, device)      # (K, N, 4)
     mean = members.mean(dim=0)
     fields = {c: mean[:, j].cpu().numpy() for j, c in enumerate(TARGET_ORDER)}

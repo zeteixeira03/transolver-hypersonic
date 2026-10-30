@@ -27,11 +27,13 @@ Copy-Item app\README.md, app\requirements.txt, app\packages.txt -Destination $ds
 Copy-Item -Recurse src "$dst\src"; `
 foreach ($s in 0..4) { $m = "data\processed\ensemble_v3\run_m32_v3_s$s"; `
   $d = New-Item -ItemType Directory -Force "$dst\$m"; `
-  Copy-Item "$m\best.pt","$m\norm_stats.pt","$m\final_eval.json" -Destination $d }
+  Copy-Item "$m\best.pt","$m\norm_stats.pt","$m\final_eval.json" -Destination $d }; `
+Copy-Item data\processed\ensemble_v3\thresholds.json -Destination "$dst\data\processed\ensemble_v3"
 ```
 
-The checkpoint layout under `$dst\data\processed\...` must match, because
-`app/inference.py` builds `ENSEMBLE_DIRS` from `ROOT / "data/processed/..."`.
+The layout under `$dst\data\processed\ensemble_v3` must match, because
+`app/inference.py` reads the five checkpoints and `thresholds.json`, the warn
+and refuse levels calibrated for this ensemble, from `ENSEMBLE_DIR`.
 
 ## 3. Push
 
@@ -47,13 +49,14 @@ https://huggingface.co/settings/tokens). Do not commit any token.
 
 The Space builds (installs `packages.txt` via apt, then `requirements.txt`),
 then launches. First build takes a few minutes. Once live, set a flight
-condition and press **Run prediction**; a prediction takes tens of seconds on
-the free CPU tier (meshing plus five-member inference), which is expected.
+condition and press **Run prediction**. The first prediction at a cone
+half-angle meshes the body; later ones at the same angle reuse that mesh,
+scaled to the nose radius, and only run the five members.
 
 ## Notes
 
-- CPU-only torch is pinned in `requirements.txt` via the PyTorch CPU index, so
-  the image stays small.
+- `requirements.txt` pins the processor-only build of torch from the PyTorch
+  index, so the image stays small.
 - `packages.txt` carries the apt libraries the gmsh wheel links against.
-- If the free tier feels slow, HF's paid CPU-upgrade (8 vCPU) drops a prediction
-  to roughly ten seconds; the free tier is the default target.
+- The free processor tier is the target. Hugging Face sells a faster
+  processor tier if predictions are too slow.

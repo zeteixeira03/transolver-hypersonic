@@ -4,8 +4,7 @@ Four sliders drive a deep-ensemble prediction of the steady flow field around
 an axisymmetric re-entry capsule. The page reports the field, a verdict of
 trust, warn or refuse that reads the ensemble uncertainty, and two analytical
 cross-checks. One prediction meshes the geometry and runs five Transolver
-members on the processor, which takes tens of seconds, so the run button holds
-it behind a spinner.
+members on the processor, so the run button holds it behind a spinner.
 """
 from __future__ import annotations
 
@@ -139,12 +138,12 @@ st.sidebar.caption(envelope_note(R_n_mm, *ENVELOPE_BOX["R_n_mm"], unit=" mm"))
 theta_c = st.sidebar.slider("Cone half-angle θ_c [deg]", 35.0, 80.0, 50.0, 1.0)
 st.sidebar.caption(envelope_note(theta_c, *ENVELOPE_BOX["theta_c"], unit="°"))
 
-_ood = [n for n, v, k in (("Mach", mach, "mach"), ("altitude", altitude, "altitude"),
+outside = [n for n, v, k in (("Mach", mach, "mach"), ("altitude", altitude, "altitude"),
                           ("R_n", R_n_mm, "R_n_mm"), ("θ_c", theta_c, "theta_c"))
         if v < ENVELOPE_BOX[k][0] or v > ENVELOPE_BOX[k][1]]
-if _ood:
-    st.sidebar.warning(f"Extrapolating on: {', '.join(_ood)}. The prediction may be "
-                       f"warn- or refuse-flagged.")
+if outside:
+    st.sidebar.warning(f"Outside the training box: {', '.join(outside)}. Expect a warn "
+                       f"or refuse verdict.")
 
 st.sidebar.markdown("---")
 st.sidebar.caption(
@@ -163,8 +162,7 @@ st.markdown(
     "A Transolver deep ensemble predicts the steady laminar flow field around an "
     "axisymmetric re-entry capsule, trained on SU2 axisymmetric Navier-Stokes ground "
     "truth. Move the sliders, run a prediction, and read the uncertainty verdict. "
-    "One prediction meshes the body and runs five members on the processor, "
-    "which takes under a minute."
+    "One prediction meshes the body and runs five members on the processor."
 )
 
 if run:
@@ -188,8 +186,9 @@ st.markdown(
 )
 
 g1, g2, g3, g4 = st.columns(4)
-g1.metric("Envelope distance", f"{pred['distance']:.3f}", help=f"L-inf box exceedance; guard at {GUARD_DIST}")
-g2.metric("Knudsen number", f"{pred['kn']:.4f}", help=f"continuum floor {KN_MAX}")
+g1.metric("Envelope distance", f"{pred['distance']:.3f}", help=("largest excess of any input over the training box, as a fraction of "
+                 f"its width; refuse above {GUARD_DIST}"))
+g2.metric("Knudsen number", f"{pred['kn']:.4f}", help=f"the continuum equations stop applying above {KN_MAX}")
 g3.metric("Ensemble spread", f"{pred['spread']:.3f}", help=f"warn at {get_ensemble()[1]['warn']:.3f}")
 g4.metric("Mesh nodes", f"{pred['n_nodes']:,}")
 
@@ -208,11 +207,11 @@ with right:
     st.metric("Shock standoff (predicted)", f"{so['mean']*1e3:.2f} mm",
               delta=f"± {so['std']*1e3:.2f} mm ensemble band", delta_color="off")
     st.caption(f"Billig correlation reference: {so['reference']*1e3:.2f} mm "
-               f"(expected agreement ~20%).")
+               f"(the correlation holds to about 20% on a spherical nose).")
 
     qw = pred["qoi"]["q_w"]
     st.metric("Stagnation heat flux (Fay-Riddell)", f"{qw['reference']/1e6:.2f} MW/m²")
-    st.caption("Analytic cold-wall value. The surrogate does not resolve the thin "
+    st.caption("Analytical value for a cold wall. The surrogate does not resolve the thin "
                "near-wall thermal gradient, so its direct heat-flux estimate is "
                "unreliable and is not shown.")
 

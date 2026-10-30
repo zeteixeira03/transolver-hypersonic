@@ -1,6 +1,5 @@
 ---
 title: Hypersonic Sphere-Cone Surrogate
-emoji: 🛰️
 colorFrom: indigo
 colorTo: red
 sdk: streamlit
@@ -18,13 +17,13 @@ flight. Ground truth is SU2 axisymmetric Navier-Stokes (ideal gas, calorically
 perfect air, Sutherland viscosity, isothermal cold wall).
 
 Four controls (Mach, altitude, nose radius, cone half-angle) drive a live
-prediction: the geometry is meshed with gmsh at training resolution and five
-ensemble members run on CPU. The app reports the flow field, an
-uncertainty-aware trust/warn/refuse verdict from the ensemble spread and a
-training-envelope guard, and two analytical cross-checks (Billig shock standoff,
-Fay-Riddell stagnation heat flux).
+prediction. The geometry is meshed with gmsh by the recipe of the training
+data, once per cone half-angle and scaled to the nose radius, and five ensemble
+members run on the processor. The app reports the flow field, a verdict of
+trust, warn or refuse from the ensemble spread and the distance to the training
+box, and two analytical cross-checks (Billig shock standoff, Fay-Riddell
+stagnation heat flux).
 
-One prediction takes tens of seconds on the free CPU tier. This is a research
-demo, not a certified engineering tool.
+This is a research demonstration, not a certified engineering tool.
 
 See the main project repository for the model, dataset, and evaluation study.
