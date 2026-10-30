@@ -1,62 +1,89 @@
-# Deploying the dashboard to Hugging Face Spaces
+# Deploying the dashboard to Streamlit Community Cloud
 
-The Space is a separate git repository from this project. It needs the app,
-the `src/` package it imports, and the five ensemble checkpoints. Total payload
-is about 10 MB (five `best.pt` at ~2 MB each), so plain git is fine, no LFS.
+Streamlit Community Cloud hosts the dashboard for free. It builds the app from
+a public GitHub repository, which is kept separate from this project so the
+checkpoints never enter it. The deploy repository holds the app, the `src`
+package it imports, and the five ensemble checkpoints. That comes to about
+10 MB, so plain git is enough.
 
-You run these steps: they involve your Hugging Face account, a write token, and
-publishing a public page.
+You run these steps yourself, because they use your GitHub account and
+publish a public page.
 
-## 1. Create the Space
+## 1. Create the repository
 
-On https://huggingface.co/new-space: choose the **Streamlit** SDK, CPU basic
-(free) hardware, and a name (e.g. `hypersonic-sphere-cone-surrogate`). This
-creates an empty repo at `https://huggingface.co/spaces/<user>/<name>`.
+On https://github.com/new, create an empty public repository, for example
+`hypersonic-sphere-cone-demo`. Add no README, license or ignore file, so the
+first push lands on an empty history.
 
-## 2. Assemble the Space directory locally
+## 2. Assemble the deploy directory
 
-From the project root, stage only what the app needs. The Space card
-(`README.md` with the YAML front matter) and `requirements.txt` / `packages.txt`
-must sit at the Space **root**; `app_file` in the card already points at
-`app/app.py`.
+From the project root, copy only what the app needs:
 
 ```powershell
-$dst = "..\hf_space"; New-Item -ItemType Directory -Force $dst; `
+$dst = "..\dashboard_deploy"; New-Item -ItemType Directory -Force $dst; `
 Copy-Item app\app.py, app\inference.py -Destination (New-Item -ItemType Directory -Force "$dst\app"); `
-Copy-Item app\README.md, app\requirements.txt, app\packages.txt -Destination $dst; `
-Copy-Item -Recurse src "$dst\src"; `
+Copy-Item app\README.md, app\requirements.txt, app\packages.txt, pyproject.toml -Destination $dst; `
+robocopy src "$dst\src" /E /XD __pycache__ | Out-Null; `
 foreach ($s in 0..4) { $m = "data\processed\ensemble_v3\run_m32_v3_s$s"; `
   $d = New-Item -ItemType Directory -Force "$dst\$m"; `
   Copy-Item "$m\best.pt","$m\norm_stats.pt","$m\final_eval.json" -Destination $d }; `
 Copy-Item data\processed\ensemble_v3\thresholds.json -Destination "$dst\data\processed\ensemble_v3"
 ```
 
-The layout under `$dst\data\processed\ensemble_v3` must match, because
-`app/inference.py` reads the five checkpoints and `thresholds.json`, the warn
-and refuse levels calibrated for this ensemble, from `ENSEMBLE_DIR`.
+Each file has a fixed place:
+
+- `requirements.txt` sits at the root. The host looks for a dependency file
+  in the entry point's directory first and then at the root, so `app/` must
+  hold none. A root `requirements.txt` takes priority over the root
+  `pyproject.toml`.
+- `pyproject.toml` sits at the root because the last line of
+  `requirements.txt`, a single `.`, installs the `src` package from it.
+  The host runs `streamlit run app/app.py`, which puts only `app/` on the
+  import path, so `from src...` works only once the package is installed.
+- `packages.txt` sits at the root, the only place the host reads it. It lists
+  the system libraries the gmsh wheel links against.
+- The checkpoints and `thresholds.json` sit under
+  `data/processed/ensemble_v3`, because `app/inference.py` reads them from
+  there.
 
 ## 3. Push
 
 ```powershell
-cd ..\hf_space; git init; git add .; git commit -m "Hypersonic sphere-cone surrogate dashboard"; `
-git remote add origin https://huggingface.co/spaces/<user>/<name>; git push -u origin main
+cd ..\dashboard_deploy; git init -b main; git add .; git commit -m "Hypersonic sphere-cone surrogate dashboard"; `
+git remote add origin https://github.com/<user>/<name>.git; git push -u origin main
 ```
 
-Authenticate with a write token when prompted (create one at
-https://huggingface.co/settings/tokens). Do not commit any token.
+## 4. Deploy
 
-## 4. Verify
+On https://share.streamlit.io, sign in with GitHub and create an app from the
+repository: branch `main`, main file path `app/app.py`. Under Advanced
+settings, choose the Python version this project runs locally (3.13, within
+the `requires-python` range of `pyproject.toml`). Then deploy.
 
-The Space builds (installs `packages.txt` via apt, then `requirements.txt`),
-then launches. First build takes a few minutes. Once live, set a flight
-condition and press **Run prediction**. The first prediction at a cone
-half-angle meshes the body; later ones at the same angle reuse that mesh,
-scaled to the nose radius, and only run the five members.
+## 5. Verify
 
-## Notes
+The first build installs `packages.txt` and then `requirements.txt`, and takes
+a few minutes. Once the app is live, set a flight condition and press
+**Run prediction**. The first prediction at a cone half-angle meshes the body;
+later ones at the same angle reuse that mesh, scaled to the nose radius, and
+only run the five members.
 
-- `requirements.txt` pins the processor-only build of torch from the PyTorch
-  index, so the image stays small.
-- `packages.txt` carries the apt libraries the gmsh wheel links against.
-- The free processor tier is the target. Hugging Face sells a faster
-  processor tier if predictions are too slow.
+## Limits
+
+- The host gives an app between 690 MB and 2.7 GB of memory and between 0.078
+  and 2 processors, by its own published figures, which it may change without
+  notice. The app peaks at about 720 MB through a prediction with all five
+  members loaded (measured on Python 3.13 with the processor-only torch
+  build), just above the guaranteed floor. If the host reports that the app
+  went over its resource limits, copy fewer `run_*` member folders in step 2.
+  The app loads every member folder it finds.
+- The first prediction at a new cone half-angle took 90 s on a desktop
+  processor, most of it meshing. On a small share of the host's processors it
+  can take several minutes. Later predictions at the same angle skip the
+  meshing.
+- The first build log should show no missing shared library. A line such as
+  `libGLU.so.1: cannot open shared object file` names a library that
+  `packages.txt` lacks. The host tries uv first and falls back to pip, so a
+  uv error followed by a pip install is harmless.
+- An app with no visitors for 12 hours goes to sleep. The next visitor wakes
+  it with one click and waits about a minute while it starts.

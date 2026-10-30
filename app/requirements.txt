@@ -1,7 +1,10 @@
-# CPU-only torch keeps the Space image small on the free tier
+# The processor-only build of torch keeps the install small on the free host.
 --extra-index-url https://download.pytorch.org/whl/cpu
 torch>=2.2
 streamlit>=1.40
 numpy>=1.26
 matplotlib>=3.8
 gmsh>=4.12
+# The app imports the src package, which only resolves once it is installed.
+# This path is relative to the root of the deploy repository.
+.

@@ -1,14 +1,3 @@
----
-title: Hypersonic Sphere-Cone Surrogate
-colorFrom: indigo
-colorTo: red
-sdk: streamlit
-sdk_version: 1.40.0
-app_file: app/app.py
-pinned: false
-license: mit
----
-
 # Hypersonic sphere-cone flow surrogate
 
 Interactive demo of a Transolver deep ensemble that predicts the steady laminar
