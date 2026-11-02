@@ -35,7 +35,12 @@ convergence. Each is implemented in `src/analytical.py`.
 
 1. Fay-Riddell equation (heat flux at the stagnation point):
 
-   $$q_w = 0.763\,\mathrm{Pr}^{-0.6}\,(\rho_w \mu_w)^{0.1}\,(\rho_e \mu_e)^{0.4}\,\sqrt{\left(\frac{du_e}{dx}\right)_s}\,(h_{0} - h_w), \qquad \left(\frac{du_e}{dx}\right)_s = \frac{1}{R_n}\sqrt{\frac{2\,(p_{02} - p_\infty)}{\rho_e}}$$
+   ```math
+   \begin{gathered}
+   q_w = 0.763\,\mathrm{Pr}^{-0.6}\,(\rho_w \mu_w)^{0.1}\,(\rho_e \mu_e)^{0.4}\,\sqrt{\left(\frac{du_e}{dx}\right)_s}\,(h_{0} - h_w) \\
+   \left(\frac{du_e}{dx}\right)_s = \frac{1}{R_n}\sqrt{\frac{2\,(p_{02} - p_\infty)}{\rho_e}}
+   \end{gathered}
+   ```
 
    where Pr is the Prandtl number, rho and mu are density and viscosity at the
    wall (w) and at the edge (e) of the boundary layer on the stagnation streamline, 
@@ -48,7 +53,9 @@ convergence. Each is implemented in `src/analytical.py`.
 
 2. Rayleigh-Pitot equation (stagnation pressure behind a normal shock):
 
-   $$\frac{p_{02}}{p_\infty} = \left[\frac{(\gamma+1)^2 M_\infty^2}{4\gamma M_\infty^2 - 2(\gamma-1)}\right]^{\gamma/(\gamma-1)} \frac{1 - \gamma + 2\gamma M_\infty^2}{\gamma+1}$$
+   ```math
+   \frac{p_{02}}{p_\infty} = \left[\frac{(\gamma+1)^2 M_\infty^2}{4\gamma M_\infty^2 - 2(\gamma-1)}\right]^{\gamma/(\gamma-1)} \frac{1 - \gamma + 2\gamma M_\infty^2}{\gamma+1}
+   ```
 
    where gamma is the ratio of specific heats and M_inf and p_inf are the
    freestream Mach number and static pressure. It gives the ratio between the
@@ -57,7 +64,9 @@ convergence. Each is implemented in `src/analytical.py`.
 
 3. Billig correlation (standoff distance of the bow shock):
 
-   $$\frac{\Delta}{R_n} = 0.143\,\exp\!\left(\frac{3.24}{M_\infty^2}\right)$$
+   ```math
+   \frac{\Delta}{R_n} = 0.143\,\exp\!\left(\frac{3.24}{M_\infty^2}\right)
+   ```
 
    where Delta is the distance from the nose to the shock along the axis. It is
    an empirical fit for the shock ahead of a spherical nose in supersonic and
@@ -358,18 +367,6 @@ comparison is logged, but it does not decide acceptance. Away from the
 canonical case the sweep sits a median 8 to 37% below Fay-Riddell, and above a
 cone half-angle of about 60 degrees the shock stands farther off than Billig.
 Those misses are not yet explained.
-
-The stopping rule of this recipe ends some runs before the flow has settled.
-Two cases were continued until nothing moved. Their median node changed by 0.1
-to 0.3%, but the worst 1% of nodes changed by 25 to 49% in temperature and 21
-to 38% in density, in the boundary layer along the nose and in the shock layer
-ahead of steep cones. Every error reported above is measured against these
-labels, not against settled solutions, and the labels are least reliable where
-the flow is hardest to predict. The fix is `scripts/run_cases.py`: a
-first-order start, a fast pass across the slow transient near the stagnation
-point, then rounds that continue each run until its wall heat flux stops
-moving. The dataset is being re-solved with it, up to a cone half-angle of 60
-degrees, and every result above will be regenerated on that set.
 
 The model predicts four primitives (rho, u, v, T) at every mesh node.
 Pressure is reconstructed as `p = rho * R_specific * T` at output time, so the

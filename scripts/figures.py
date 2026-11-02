@@ -319,6 +319,8 @@ def spread_calibration() -> None:
     lo, hi = 0.04, 0.42
     ax.axvspan(th["warn"], th["refuse"], color=VERDICT["warn"], alpha=0.07, lw=0)
     ax.axvspan(th["refuse"], hi, color=VERDICT["refuse"], alpha=0.07, lw=0)
+    for name in ("warn", "refuse"):
+        ax.axvline(th[name], color=VERDICT[name], lw=1.0, ls="--", alpha=0.7)
     for x, name in ((lo, "trust"), (th["warn"], "warn"), (th["refuse"], "refuse")):
         ax.annotate(name, (x, 0.97), xycoords=("data", "axes fraction"), xytext=(5, 0),
                     textcoords="offset points", color=VERDICT[name], va="top")
