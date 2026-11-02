@@ -1,23 +1,10 @@
 """Validate the whole simulation pipeline on one canonical Mach 10 case.
 
-The script meshes with gmsh, renders the SU2 configuration, runs SU2_CFD, reads
-the outputs, compares three quantities against Fay-Riddell, Rayleigh-Pitot and
-Billig, and writes an acceptance figure with a summary in JSON.
-
-The case is a cold-wall re-entry body of the kind Anderson works through:
-
-    R_n         = 0.0254 m   (1 inch)
-    theta_c     = 60 deg
-    R_b         = 0.0762 m
-    R_s         = 0.00762 m
-    M_inf       = 10
-    T_inf       = 220 K
-    p_inf       = 100 Pa     (near 60 km altitude)
-    T_w         = 300 K      (isothermal cold wall)
-
-Run it from the project root. Where SU2_CFD sits on the executable search path,
-the script calls it directly. Otherwise it routes the call into the Windows
-Subsystem for Linux, using the distribution "Ubuntu-22.04" and the conda
+The script meshes with gmsh, runs SU2_CFD in two passes, compares stagnation
+heat flux, stagnation pressure and shock standoff against Fay-Riddell,
+Rayleigh-Pitot and Billig, and writes an acceptance figure with a JSON summary.
+Run it from the project root. SU2_CFD runs directly when it is on the path and
+otherwise inside the Linux subsystem, distribution "Ubuntu-22.04", conda
 environment "su2".
 """
 
@@ -34,8 +21,6 @@ from typing import Any
 
 import numpy as np
 
-# put the project root on the import path, so "from src..." resolves when this
-# file runs as a script
 from src.cfd.postprocess import (
     extract_axis_line,
     extract_surface,
@@ -73,16 +58,14 @@ def make_acceptance_figure(
 
     fig, axes = plt.subplots(2, 2, figsize=(11, 8.5))
 
-    # sort the surface nodes by r, so a wall plot runs in one sweep from the
-    # stagnation point at r = 0, up the sphere, along the cone and around the
-    # shoulder
+    # sorted by r, the wall runs from the stagnation point over the sphere, the
+    # cone and the shoulder
     x, y = surface["x"], surface["y"]
     order = np.argsort(y)
     x_s = x[order]
     y_s = y[order]
     s = np.cumsum(np.concatenate([[0.0], np.hypot(np.diff(x_s), np.diff(y_s))]))
 
-    # ---- surface pressure against arc length ----
     ax = axes[0, 0]
     if "p" in surface:
         p_s = surface["p"][order]
@@ -95,7 +78,6 @@ def make_acceptance_figure(
         ax.legend(loc="best", fontsize=8)
         ax.set_ylim(bottom=0)
 
-    # ---- surface heat flux against arc length ----
     ax = axes[0, 1]
     if "qw" in surface:
         qw_s = surface["qw"][order]
@@ -107,9 +89,8 @@ def make_acceptance_figure(
                    label=f"Fay-Riddell q_w = {summary['ref_qw']:.3g} W/m^2")
         ax.legend(loc="best", fontsize=8)
 
-    # ---- pressure along the axis line, which locates the shock ----
     ax = axes[1, 0]
-    # frame about 0.5 R_n upstream of the body, where the shock stands
+    # the shock stands within 0.5 R_n of the nose
     x_axis = axis["x"]
     R_n = case.R_n
     mask = x_axis > -0.5 * R_n
@@ -126,7 +107,6 @@ def make_acceptance_figure(
     ax.set_title("stagnation line pressure (offset r=0.05 R_n)")
     ax.legend(loc="best", fontsize=8)
 
-    # ---- sanity check table ----
     ax = axes[1, 1]
     ax.axis("off")
     text = format_summary(summary)
@@ -187,7 +167,7 @@ def main():
             "returncode": 0,
         }
     else:
-        # ---- first pass: first order, which converges from a cold start ----
+        # first order converges from a cold start
         t0 = time.time()
         result_p1 = run_case(
             CANONICAL,
@@ -211,8 +191,7 @@ def main():
             print(f"[validate] pass 1 failed; see {result_p1['log']}")
             sys.exit(2)
 
-        # the second pass reads solution_flow.dat, so rename the restart file
-        # the first pass wrote
+        # the second pass restarts from solution_flow.dat
         restart_dat = run_dir / "restart_flow.dat"
         solution_dat = run_dir / "solution_flow.dat"
         if not restart_dat.exists():
@@ -220,7 +199,6 @@ def main():
             sys.exit(2)
         shutil.copyfile(restart_dat, solution_dat)
 
-        # ---- second pass: second order, restarted from the first ----
         t0 = time.time()
         result = run_case(
             CANONICAL,
@@ -247,16 +225,11 @@ def main():
               f"{result['log']}")
         sys.exit(2)
 
-    # ---- read the outputs ----
-    # every stagnation quantity is taken off the axis rather than on it. the
-    # wall node at r = 0 carries the singularity of the axisymmetric source
-    # term, which inflates both pressure and heat flux there, and the accepted
-    # practice is to skip a thin band above the axis.
-    #
-    # the stagnation pressure that Rayleigh-Pitot predicts is read as the
-    # plateau behind the shock on a streamline offset from the axis. subsonic
-    # shock-layer theory says the value at the body wall equals it, but the axis
-    # artifact corrupts the wall value here, so the plateau is reported instead.
+    # the wall node at r = 0 carries the singularity of the axisymmetric source
+    # term, which inflates pressure and heat flux there, so stagnation values
+    # skip a thin band above the axis. the stagnation pressure is the plateau
+    # behind the shock on a line offset from the axis, because the same
+    # artifact corrupts the wall value.
     R_n = CANONICAL.R_n
     L_far = DEFAULT_MESH_KWARGS["L_far"]
     y_skip = 0.05 * R_n
@@ -270,8 +243,6 @@ def main():
     standoff = find_shock_standoff(axis, p_inf=CANONICAL.p_inf)
 
     su2_qw = stag.get("qw", float("nan"))
-    # the stagnation pressure is the median of the plateau behind the shock,
-    # taken on the offset axis line
     su2_p02 = standoff.get("p_post_plateau", float("nan"))
     if np.isnan(su2_p02):
         su2_p02 = stag.get("p", float("nan"))
@@ -288,7 +259,6 @@ def main():
     print()
     print(format_summary(summary))
 
-    # ---- persist ----
     out_json = run_dir / "cfd_validation_summary.json"
     payload = {
         "case": asdict(CANONICAL),
@@ -315,7 +285,7 @@ def main():
     make_acceptance_figure(CANONICAL, surface, axis, summary, standoff, fig_path)
     print(f"[validate] acceptance figure written to {fig_path}")
 
-    # ---- extract the training tensors, which also tests that path ----
+    # also exercises the training-tensor path
     npz_path = run_dir / "case.npz"
     tensors = extract_training_tensors(result["volume_vtu"], save_npz=npz_path)
     print(f"[validate] training tensors written to {npz_path} "

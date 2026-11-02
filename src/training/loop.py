@@ -1,10 +1,7 @@
 """
 Training and evaluation loop for Transolver on SU2 and AirfRANS meshes.
 
-The loss is the mean squared error over normalized targets. Given a surface
-weight, it follows the recipe of the Transolver authors on AirfRANS instead:
-the error over volume nodes plus that weight times the error over surface nodes.
-A batch holds one mesh, because the node count differs from mesh to mesh.
+The loss is the mean squared error over normalized targets. One mesh per batch.
 """
 
 from __future__ import annotations
@@ -49,9 +46,9 @@ def train_one_epoch(
 ) -> dict[str, float]:
     """One pass over the training split. Returns the mean losses and gradient norms.
 
-    Above zero, ``surface_weight`` splits the error into volume and surface
-    terms, and ``qw_weight`` adds the loss of the stagnation heat-flux head. A
-    case without a heat flux in the ledger carries NaN there and drops out.
+    ``surface_weight`` above zero adds that weight times the surface-node error
+    to the volume-node error, the AirfRANS recipe of the Transolver authors.
+    ``qw_weight`` adds the heat-flux head loss; cases with NaN heat flux drop out.
     """
     model.train()
     t0 = time.time()
@@ -88,8 +85,7 @@ def train_one_epoch(
                 f"prediction in [{float(pred.min()):.3g}, {float(pred.max()):.3g}]"
             )
         loss.backward()
-        # an infinite max_norm clips nothing and still returns the norm, which is
-        # worth logging on every run
+        # an infinite max_norm clips nothing but still returns the norm
         gnorm = float(torch.nn.utils.clip_grad_norm_(
             model.parameters(), grad_clip if grad_clip > 0 else float("inf")))
         optimizer.step()
@@ -122,14 +118,11 @@ def evaluate(
 ) -> tuple[dict, list[dict]]:
     """Score every case of a split at full mesh resolution.
 
-    Each per-case record holds the relative L2 per channel in physical units,
-    the fraction of nodes where density, temperature or pressure comes out
-    nonpositive, and, for a free pressure channel, the median departure from
-    ``p = rho R T``. It also holds a finite-difference stagnation heat flux read
-    from the predicted and the true temperature fields, and, with ``qw_spec``,
-    the output of the heat-flux head next to the value SU2 reported.
-
-    Returns the split means and the per-case records.
+    Each record holds relative L2 per channel in physical units, the fraction
+    of nonpositive density, temperature or pressure, the median departure from
+    ``p = rho R T`` for a free pressure channel, the finite-difference heat flux
+    of the true and predicted temperature fields, and with ``qw_spec`` the
+    heat-flux head output. Returns the split means and the records.
     """
     model.eval()
     targets = stats.targets

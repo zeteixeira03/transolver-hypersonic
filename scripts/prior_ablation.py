@@ -1,36 +1,13 @@
 """Physics-prior ablation: low-data split construction and the results table.
 
-The surrogate carries three physics priors. Each one is switched off in turn
-and priced against a baseline that keeps all three. The training split is small
-on purpose, because a prior earns its place when data is scarce. On the full
-dataset these rows would sit too close together to separate.
-
-Cells
------
-``base``        pressure reconstructed, log10 on density and temperature
-``free_p``      pressure as a free fifth channel, no equation-of-state constraint
-``plain_norm``  plain standardization on every channel
-``qw_direct``   a second head that predicts log10 of the wall heat flux
-``qw_resid``    a second head that predicts log10 of q_w over the Fay-Riddell value
-
-``qw_resid`` is measured against ``qw_direct`` and not against ``base``, because
-``qw_direct`` is the control for the second head itself. Comparing against
-``base`` would price the head and the Fay-Riddell anchor together.
-
-Splits
-------
-Only the training split is small. The evaluation tiers take their exact case
-lists from an existing run, so every cell is scored on the same held-out cases
-at full size.
-
-The training split is drawn from the core group alone, stratified by geometry.
-It excludes the active-learning cases. Ensemble uncertainty selected those
-adaptively, so they are not an independent and identically distributed sample
-of the parameter box and would confound a comparison between priors.
-
-The split file lives in ``configs/`` rather than under ``data/processed/``,
-because training runs from a fresh clone and ``data/processed/`` is not
-committed.
+Each of the three physics priors is switched off in turn against a baseline
+that keeps all three, on a small training split, because a prior matters most
+when data is scarce. ``qw_resid`` is measured against ``qw_direct``, so the
+Fay-Riddell anchor is priced apart from the head itself. The evaluation tiers
+copy their case lists from a reference run. The training split leaves out the
+active-learning cases: ensemble uncertainty chose them, so they are not a
+uniform sample of the box. The split file lives in ``configs/`` because
+training runs from a fresh clone, where ``data/processed/`` is absent.
 
 Usage
 -----
@@ -87,8 +64,7 @@ def build_splits(
     n_train : int
         Size of the small training split.
     seed : int
-        Seed for the stratified draw. It is written into the file, so the split
-        can be rebuilt.
+        Seed for the stratified draw.
 
     Returns
     -------
@@ -112,9 +88,7 @@ def build_splits(
     if pool_size < n_train:
         raise SystemExit(f"train pool has {pool_size} cases, need {n_train}")
 
-    # take one case per geometry in turn, so a small draw still covers the
-    # family of shapes instead of filling up from the geometries with the most
-    # cases
+    # one case per geometry in turn, so a small draw covers every shape
     rng = random.Random(seed)
     geoms = sorted(by_geom)
     rng.shuffle(geoms)
@@ -159,10 +133,7 @@ def tier_mean_rl2(records: list[dict], channels: tuple[str, ...]) -> float | Non
 def qw_abs_rel_median(records: list[dict], key: str, truth_key: str) -> float | None:
     """Median absolute relative error of a heat-flux estimate against its own truth.
 
-    Two heat-flux numbers exist per case and they are not interchangeable. The
-    estimate read off the temperature field is scored against the same estimator
-    applied to the true field. The head is scored against the ledger value it
-    trained on. The caller names the truth key, so the two never cross. Crossing
+    The finite-difference estimate and the head have different truths. Crossing
     them would inflate the head error by the factor between the estimators.
     """
     rel = [abs(r[key] - r[truth_key]) / abs(r[truth_key])
@@ -191,10 +162,8 @@ def summarize_run(run_dir: Path) -> dict:
         out["rL2_p"] = tier_mean_rl2(per_case["test"], ("p",))
     eos = [r["eos_viol"] for r in in_dist if "eos_viol" in r]
     out["eos_viol"] = float(np.median(eos)) if eos else 0.0
-    # the worst of the channels that physics requires to stay positive. a
-    # negative freestream density moves the relative L2 little, because those
-    # nodes carry small magnitudes. without this column the table would rank an
-    # unusable field above a valid one.
+    # a negative freestream density barely moves the relative L2, because those
+    # nodes carry small magnitudes, so this column catches unusable fields
     nonpos = [max(r.get(f"frac_nonpos_{c}", 0.0) for c in ("rho", "T", "p"))
               for r in in_dist
               if any(f"frac_nonpos_{c}" in r for c in ("rho", "T", "p"))]

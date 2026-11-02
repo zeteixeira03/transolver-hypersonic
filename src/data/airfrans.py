@@ -1,9 +1,8 @@
 """
 AirfRANS dataset wrapper for stack validation.
 
-The official `airfrans` package returns one array per simulation, of shape
-(N, 12). The column layout below is the one in the package source at
-github.com/Extrality/airfrans_lib:
+The `airfrans` package returns one array of shape (N, 12) per simulation, with
+the columns of github.com/Extrality/airfrans_lib:
 
     columns  0..1   position (x, y) in metres
     columns  2..3   inlet velocity (vx, vy), repeated at every point
@@ -13,10 +12,6 @@ github.com/Extrality/airfrans_lib:
     column   9      target pressure divided by specific mass
     column  10      target turbulent kinematic viscosity
     column  11      surface flag, 1 where the point lies on the airfoil
-
-The model reads columns 0 to 6, which is 7 channels, and predicts columns 7 to
-10, which is 4. The surface flag drives both the surface term of the loss and
-the pressure-coefficient acceptance figure.
 """
 
 from __future__ import annotations
@@ -63,11 +58,9 @@ class NormStats:
 def compute_norm_stats(arrays: list[np.ndarray]) -> NormStats:
     """Per-channel mean and standard deviation over every training point.
 
-    The parallel form of the Welford update merges the per-case
-    ``(mean, M2, count)`` summaries, so peak memory does not grow with the
-    number of cases. Memory is the reason for it. One concatenated tensor over
-    the whole point set peaks near four times the size of the dataset, which
-    exceeds the 12 GB a free Colab session offers on the scarce task.
+    Merges per-case summaries with the parallel Welford update. One
+    concatenated tensor peaks near four times the dataset size, beyond the
+    12 GB of a free Colab session on the scarce task.
     """
     n_total = 0
     mean_acc: np.ndarray | None = None
@@ -96,11 +89,9 @@ def compute_norm_stats(arrays: list[np.ndarray]) -> NormStats:
     eps = 1e-8
     x_mean = mean_acc[INPUT_COLS].copy()
     x_std = std[INPUT_COLS].copy() + eps
-    # the surface normals sit at input indices 5 and 6. they are zero away from
-    # the airfoil and unit on it, so their fitted standard deviation is tiny and
-    # standardization would push the on-airfoil values to 12 or 15 sigma. the
-    # activations that follow then reach infinity within a few epochs. keep
-    # these two channels at their native [-1, 1] scale.
+    # the surface normals (inputs 5 and 6) are zero almost everywhere, so
+    # standardizing them puts on-airfoil values at 12 to 15 sigma and the
+    # activations overflow within a few epochs
     x_mean[5:7] = 0.0
     x_std[5:7] = 1.0
     return NormStats(
@@ -115,22 +106,10 @@ def compute_norm_stats(arrays: list[np.ndarray]) -> NormStats:
 #                                       torch dataset
 # ============================================================================================
 class AirfRANSDataset(Dataset):
-    """
-    One item is one simulation, drawn down to a fixed number of points when
-    asked. ``stats`` normalizes the returned tensors.
+    """One simulation per item, normalized with ``stats``.
 
-    Parameters
-    ----------
-    arrays : list of np.ndarray
-        One array of shape (N_i, 12) per simulation, as airfrans.dataset.load
-        returns them.
-    names : list of str
-        Simulation names, kept for evaluation and for the figures.
-    stats : NormStats
-        Normalization statistics computed on the training split.
-    subsample : int, optional
-        Draw this many points at random per call to ``__getitem__``. Each call
-        draws again, so every epoch sees a different subset.
+    ``arrays`` holds one (N_i, 12) array per simulation. ``subsample`` draws
+    that many points afresh on every call.
     """
 
     def __init__(
@@ -182,13 +161,7 @@ def load_split(
     task: str = "scarce",
     train: bool = True,
 ) -> tuple[list[np.ndarray], list[str]]:
-    """Load one split through airfrans.dataset.load and return plain lists.
-
-    The package hands back float64 arrays, and the cast to float32 here halves
-    the peak memory a free Colab session must hold. The model gains nothing
-    from the extra precision, because training runs in float32 or in mixed
-    precision.
-    """
+    """Load one split as float32 arrays, which halves peak memory over float64."""
     import airfrans as af
 
     arrays, names = af.dataset.load(root=str(root), task=task, train=train)
@@ -210,9 +183,9 @@ def evaluate_airfrans(model: torch.nn.Module, dataset: AirfRANSDataset, stats: N
                       device: str) -> dict[str, float]:
     """Mean relative L2 per channel over the held-out simulations, plus surface pressure.
 
-    Only pressure, channel 2, gets a surface score. No-slip holds both velocity
-    components and the turbulent viscosity near zero at the wall, so their
-    relative error there would divide by an almost empty norm.
+    Only pressure (channel 2) gets a surface score: velocity and turbulent
+    viscosity are near zero at a no-slip wall, so their relative error there is
+    meaningless.
     """
     model.eval()
     per_sim, per_sim_surf = [], []

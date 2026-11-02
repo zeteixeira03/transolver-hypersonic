@@ -1,4 +1,4 @@
-"""Unit tests for the sweep sampler and SQLite ledger. No SU2 run required."""
+"""Sweep sampler, partition and SQLite ledger. No SU2 run needed."""
 
 from __future__ import annotations
 
@@ -52,8 +52,7 @@ def test_atmosphere_rejects_out_of_range():
 def test_sample_cases_count_and_determinism():
     a = sample_cases(n_geom=8, n_fs=3, n_geom_ood=2, n_fs_ood=1, seed=1)
     b = sample_cases(n_geom=8, n_fs=3, n_geom_ood=2, n_fs_ood=1, seed=1)
-    # the Knudsen filter drops any draw in the rarefied regime, so the count
-    # cannot pass the nominal sample size and need not reach it
+    # the Knudsen filter drops rarefied draws, so the count can fall below nominal
     nominal = 8 * 3 + len(OOD_SLABS) * 2 * 1
     assert 0 < len(a) <= nominal
     assert len(a) == len(b)
@@ -61,11 +60,9 @@ def test_sample_cases_count_and_determinism():
     for s in a:
         c = s.case
         assert knudsen_number(c.mach, c.T_inf, c.p_inf, c.R_n) <= KN_MAX
-    # determinism: same seed -> identical case parameters
     for sa, sb in zip(a, b):
         assert sa.group == sb.group and sa.geom_id == sb.geom_id
         assert sa.case == sb.case
-    # different seed -> different sample
     c = sample_cases(n_geom=8, n_fs=3, n_geom_ood=2, n_fs_ood=1, seed=2)
     assert any(sa.case != sc.case for sa, sc in zip(a, c))
 
@@ -85,7 +82,6 @@ def test_sample_cases_respects_core_bounds():
 
 def test_sample_cases_geometry_clusters_are_contiguous():
     specs = sample_cases(n_geom=6, n_fs=5, n_geom_ood=0, n_fs_ood=0, seed=4)
-    # every geom_id appears in one unbroken run
     seen_runs = []
     last = object()
     for s in specs:
@@ -93,7 +89,6 @@ def test_sample_cases_geometry_clusters_are_contiguous():
             assert s.geom_id not in [g for g, _ in seen_runs], "geom cluster split"
             seen_runs.append((s.geom_id, 1))
             last = s.geom_id
-    # and within a cluster the geometry is identical
     by_geom: dict[int, list[Case]] = {}
     for s in specs:
         by_geom.setdefault(s.geom_id, []).append(s.case)
@@ -155,11 +150,9 @@ def test_init_ledger_rows_and_restart_links(tmp_path):
         if rf is None:
             continue
         prev = rows[rf]
-        # a restart link only points at the immediate predecessor, same geom, same block
         assert rf == r["ord"] - 1
         assert prev["geom_id"] == r["geom_id"]
         assert prev["block"] == r["block"]
-    # the first case of each block has no restart link
     first_of_block = {}
     for r in rows:
         first_of_block.setdefault(r["block"], r)
@@ -169,7 +162,6 @@ def test_init_ledger_rows_and_restart_links(tmp_path):
 
 def test_init_ledger_is_idempotent(tmp_path):
     db, specs = _tiny_ledger(tmp_path)
-    # claim and finish one case, then re-init: the finished row must survive
     cid, case, _ = L.claim_next(db, "worker_a")
     L.mark_done(db, cid, qw=1.0, p02=2.0, standoff=3e-3, checks_passed=True)
     L.init_ledger(db, specs, n_blocks=2)
@@ -183,12 +175,11 @@ def test_claim_mark_and_recover(tmp_path):
     cid1, case1, rf1 = L.claim_next(db, "worker_a")
     assert cid1 == 0 and rf1 is None and isinstance(case1, Case)
     cid2, _, _ = L.claim_next(db, "worker_b")
-    assert cid2 == 1  # next by ord
+    assert cid2 == 1
     L.mark_done(db, cid1, qw=1.0, p02=2.0, standoff=3e-3, checks_passed=True)
     L.mark_failed(db, cid2, "boom")
     counts = L.status_counts(db)
     assert counts["done"] == 1 and counts["failed"] == 1
-    # recent_done returns the finished one with its quantities
     rd = L.recent_done(db, limit=10)
     assert len(rd) == 1 and rd[0]["case_id"] == cid1 and rd[0]["qw"] == 1.0
 
@@ -197,18 +188,15 @@ def test_reclaim_stale(tmp_path):
     db, specs = _tiny_ledger(tmp_path, n_geom=1, n_fs=1, n_blocks=1)
     assert len(specs) == 1
     cid, _, _ = L.claim_next(db, "worker_a")
-    # nothing is stale with a long lease
     assert L.reclaim_stale(db, max_age_s=1e9) == 0
-    # a lease of zero returns the running row to pending, since 1 attempt is
-    # still under MAX_ATTEMPTS
+    # every claim costs one attempt; an expired lease returns the row to pending until
+    # MAX_ATTEMPTS is spent, then marks it failed
     assert L.reclaim_stale(db, max_age_s=0.0) == 1
     assert L.status_counts(db) == {"pending": 1}
-    # burn the rest of the budget; every claim costs one attempt
     for _ in range(L.MAX_ATTEMPTS - 2):
         L.claim_next(db, "worker_a")
         assert L.reclaim_stale(db, max_age_s=0.0) == 1
         assert L.status_counts(db) == {"pending": 1}
-    # the last claim exhausts it, so expiring the lease marks the row failed
     L.claim_next(db, "worker_a")
     assert L.reclaim_stale(db, max_age_s=0.0) == 1
     con = L.connect(db)

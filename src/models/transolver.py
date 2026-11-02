@@ -7,16 +7,13 @@ Tsinghua University). The reference paper is Wu et al., "Transolver: A Fast
 Transformer Solver for PDEs on General Geometries", ICML 2024,
 arXiv:2402.02366.
 
-Five differences from the reference implementation matter to anyone who
-compares this file against the authors' repository:
+Differences from the reference implementation:
 
 - ``forward`` takes plain tensors of shape (B, N, C) and an optional position
-  tensor. The reference takes a PyTorch Geometric ``Data`` object. Plain tensors
-  let the module run and be tested outside the AirfRANS pipeline.
+  tensor, not a PyTorch Geometric ``Data`` object.
 - The bounds and the resolution of the ``unified_pos`` reference grid are
   parameters. The reference fixes them to the AirfRANS spatial domain.
-- Function-style helpers use snake_case. The PyTorch Module classes keep
-  CamelCase, as PyTorch does.
+- Function-style helpers use snake_case.
 - An optional case-level head predicts stagnation wall heat flux.
 - The slice temperature enters as ``max(|t|, 0.1)``. The reference divides by
   the raw learned value.
@@ -52,18 +49,9 @@ class PhysicsAttentionIrregularMesh(nn.Module):
     """
     Physics-Attention for point clouds / irregular meshes.
 
-    The block covers Equations 6 to 9 of arXiv:2402.02366 in three steps:
-
-    1. Slice. Each of N points is softly assigned to one of M learned slices
-       via softmax weights w(x_i, j). A slice token z_j is the
-       weight-averaged feature aggregated from all points belonging to that
-       slice.
-    2. Self-attention among the M slice tokens.
-    3. Deslice. Each point's output is the weighted sum of the attended slice
-       tokens, weighted by the same slice assignments from step 1.
-
-    Each head slices independently, so a head can specialize on one physical
-    regime such as the boundary layer or the free stream.
+    Equations 6 to 9: softly assign N points to M slices, attend among the M
+    slice tokens, then scatter back with the same weights. Each head slices
+    independently.
     """
 
     def __init__(
@@ -81,16 +69,14 @@ class PhysicsAttentionIrregularMesh(nn.Module):
         self.scale = dim_head ** -0.5
         self.softmax = nn.Softmax(dim=-1)
         self.dropout = nn.Dropout(dropout)
-        # learnable softmax temperature, broadcast over (B, H, N, M)
+        # broadcast over (B, H, N, M)
         self.temperature = nn.Parameter(torch.ones(1, heads, 1, 1) * 0.5)
 
-        # projections for the slice step: x_mid drives slice assignments,
-        # fx_mid is the per-point feature being aggregated into slice tokens
+        # x_mid drives slice assignments, fx_mid is aggregated into slice tokens
         self.in_project_x = nn.Linear(dim, inner_dim)
         self.in_project_fx = nn.Linear(dim, inner_dim)
         self.in_project_slice = nn.Linear(dim_head, slice_num)
-        # an orthogonal start on the slice-assignment projection spreads the
-        # slice prototypes apart before the first step
+        # spreads the slice prototypes apart at the start
         nn.init.orthogonal_(self.in_project_slice.weight)
 
         self.to_q = nn.Linear(dim_head, dim_head, bias=False)
@@ -106,8 +92,7 @@ class PhysicsAttentionIrregularMesh(nn.Module):
         # x: (B, N, C)
         b, n, _ = x.shape
 
-        # step 1: slice. project to (B, H, N, dim_head), then compute
-        # slice-assignment logits in (B, H, N, M) and softmax over M.
+        # slice: (B, H, N, dim_head) features, softmax over M slices
         fx_mid = (
             self.in_project_fx(x)
             .reshape(b, n, self.heads, self.dim_head)
@@ -120,9 +105,7 @@ class PhysicsAttentionIrregularMesh(nn.Module):
             .permute(0, 2, 1, 3)
             .contiguous()
         )
-        # the temperature is learned and must stay positive. the floor of 0.1 is
-        # active in trained checkpoints (values down to 0.087), so removing it
-        # changes their predictions.
+        # the 0.1 floor is active in trained checkpoints (values down to 0.087)
         temp = self.temperature.abs().clamp_min(0.1)
         slice_weights = self.softmax(self.in_project_slice(x_mid) / temp)  # (B, H, N, M)
         slice_norm = slice_weights.sum(2)  # (B, H, M), sum over points per slice
@@ -131,7 +114,7 @@ class PhysicsAttentionIrregularMesh(nn.Module):
             1, 1, 1, self.dim_head
         )
 
-        # step 2: self-attention among the M slice tokens
+        # attention among the M slice tokens
         q = self.to_q(slice_token)
         k = self.to_k(slice_token)
         v = self.to_v(slice_token)
@@ -139,8 +122,7 @@ class PhysicsAttentionIrregularMesh(nn.Module):
         attn = self.dropout(self.softmax(dots))
         out_slice_token = torch.matmul(attn, v)  # (B, H, M, dim_head)
 
-        # step 3: deslice. broadcast attended slice tokens back to points
-        # using the same slice-assignment weights.
+        # deslice with the same weights
         out_x = torch.einsum("bhgc,bhng->bhnc", out_slice_token, slice_weights)
         out_x = rearrange(out_x, "b h n d -> b n (h d)")
         return self.to_out(out_x)
@@ -150,6 +132,8 @@ class PhysicsAttentionIrregularMesh(nn.Module):
 #                                    feed-forward network
 # ============================================================================================
 class MLP(nn.Module):
+    """Feed-forward network with optional residual hidden layers."""
+
     def __init__(
         self,
         n_input: int,
@@ -228,50 +212,11 @@ class Transolver(nn.Module):
     """
     Stack of Transolver blocks for point-cloud regression.
 
-    Inputs are a per-point feature tensor of shape (B, N, space_dim + fun_dim)
-    where the spatial coordinates occupy the first `space_dim` channels and
-    optional auxiliary functions occupy the remaining `fun_dim` channels.
-    Outputs are per-point predictions of shape (B, N, out_dim).
-
-    ``unified_pos`` appends to each point its distance to every node of a fixed
-    reference grid, which adds ``grid_ref**2`` channels. Those distances give
-    the model a common frame when the geometries differ widely. The bounds and
-    the resolution of the grid are parameters.
-
-    Parameters
-    ----------
-    space_dim : int
-        Number of spatial coordinate channels in the input.
-    fun_dim : int
-        Number of additional input function channels.
-    out_dim : int
-        Number of output channels per point.
-    n_hidden : int
-        Hidden dimension throughout the encoder.
-    n_layers : int
-        Number of TransolverBlocks.
-    n_head : int
-        Number of attention heads.
-    mlp_ratio : int
-        Hidden expansion factor inside the feed-forward network of each block.
-    slice_num : int
-        Number of physics slices M used by Physics-Attention.
-    dropout : float
-        Dropout applied inside attention and the output projection.
-    act : str
-        Activation name. One of the keys of ACTIVATIONS.
-    unified_pos : bool
-        Whether to append reference-grid distance features.
-    grid_ref : int
-        Resolution of the reference grid along each axis.
-    grid_bounds : tuple of float
-        Bounds of the reference grid, (xmin, xmax, ymin, ymax). Two dimensions
-        only.
-    qw_head : bool
-        Add a case-level scalar head for the stagnation wall heat flux. It reads
-        the mean over points of the final hidden features. When set, ``forward``
-        returns the pair ``(per_point, scalar)`` rather than the per-point
-        tensor alone.
+    Input (B, N, space_dim + fun_dim), coordinates first; output (B, N, out_dim).
+    ``unified_pos`` appends the distance to each node of a ``grid_ref`` x
+    ``grid_ref`` reference grid over ``grid_bounds`` (xmin, xmax, ymin, ymax).
+    ``qw_head`` adds a case-level heat-flux scalar read from the point-mean of
+    the final hidden features, and ``forward`` then returns ``(per_point, scalar)``.
     """
 
     def __init__(
@@ -320,9 +265,8 @@ class Transolver(nn.Module):
             ]
         )
 
-        # the mean over points does not depend on how many points there are, so
-        # the 8192-node subsample seen in training estimates the same statistic
-        # as the full mesh seen at evaluation
+        # a point-mean, so the 8192-node training subsample and the full
+        # evaluation mesh estimate the same statistic
         self.qw_head = (
             MLP(n_hidden, n_hidden, 1, n_layers=1, act=act) if qw_head else None
         )
@@ -345,19 +289,7 @@ class Transolver(nn.Module):
 
     # --------------------------------------------------------------------------------------
     def _build_grid_features(self, pos: torch.Tensor) -> torch.Tensor:
-        """
-        Compute per-point distances to a fixed reference grid.
-
-        Parameters
-        ----------
-        pos : torch.Tensor
-            Point coordinates of shape (B, N, 2).
-
-        Returns
-        -------
-        torch.Tensor
-            Distance features of shape (B, N, grid_ref**2).
-        """
+        """Distances from (B, N, 2) points to the reference grid, shape (B, N, grid_ref**2)."""
         b = pos.shape[0]
         xmin, xmax, ymin, ymax = self.grid_bounds
         gx = torch.tensor(np.linspace(xmin, xmax, self.grid_ref), dtype=torch.float32, device=pos.device)
@@ -374,22 +306,9 @@ class Transolver(nn.Module):
         x: torch.Tensor,
         pos: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
-        """
-        Parameters
-        ----------
-        x : torch.Tensor
-            Per-point input features of shape (B, N, space_dim + fun_dim).
-            The first `space_dim` channels are taken to be coordinates.
-        pos : torch.Tensor, optional
-            Point coordinates of shape (B, N, 2), required when
-            `unified_pos` is True. If None, `x[..., :2]` is used.
+        """Predict (B, N, out_dim), plus a (B,) heat flux with ``qw_head``.
 
-        Returns
-        -------
-        torch.Tensor
-            Per-point predictions of shape (B, N, out_dim). When the model
-            carries ``qw_head``, the return value is that tensor paired with a
-            per-case scalar of shape (B,).
+        ``pos`` defaults to ``x[..., :2]``.
         """
         if self.unified_pos:
             if pos is None:

@@ -1,11 +1,6 @@
-"""Tests for the physics-prior ablation: q_w encoding, the head, and the table.
+"""Physics-prior ablation: heat-flux encoding, heat-flux head, run capture and results table.
 
-Two checks here carry the weight, because a failure in either corrupts a
-results row instead of raising. The residual encoding of the heat flux must
-invert exactly, since a broken decode still returns a plausible number. And the
-table must score each heat-flux estimate against its own truth, because the
-finite-difference value and the ledger value differ by more than a factor of ten
-on this dataset.
+A broken decode or a crossed truth fills a results row with a plausible number instead of raising.
 """
 
 from __future__ import annotations
@@ -47,19 +42,16 @@ def test_residual_target_is_the_log_ratio():
     """The residual arm must regress the departure from Fay-Riddell, not q_w."""
     spec = QwSpec("residual", mean=0.0, std=1.0)
     assert spec.log_target(2.0e6, 1.0e6) == pytest.approx(np.log10(2.0))
-    # a case sitting exactly on the correlation has a zero target
     assert spec.log_target(1.0e6, 1.0e6) == pytest.approx(0.0)
 
 
 def test_residual_head_at_zero_returns_the_analytical_value():
-    """An untrained residual head should fall back near Fay-Riddell, which is
-    the whole point of the prior."""
+    """An untrained residual head, which outputs about zero, falls back to Fay-Riddell."""
     spec = QwSpec("residual", mean=0.0, std=0.02)
     assert spec.decode(0.0, 3.9e6) == pytest.approx(3.9e6)
 
 
 def test_direct_and_residual_differ_in_scale():
-    """A direct target sits near log10 q_w and a residual target sits near zero."""
     qw, q_fr = 4.2e6, 3.9e6
     assert QwSpec("direct", 0.0, 1.0).log_target(qw, q_fr) > 6.0
     assert abs(QwSpec("residual", 0.0, 1.0).log_target(qw, q_fr)) < 0.1
@@ -91,8 +83,7 @@ def test_qw_head_returns_point_and_scalar():
 
 
 def test_qw_head_is_insensitive_to_node_count():
-    """Mean pooling must give a comparable scalar on a subsample and on the
-    full mesh, since training subsamples and evaluation does not."""
+    """Training subsamples the mesh and evaluation does not, so the pooled scalar must agree."""
     torch.manual_seed(0)
     model = _model(qw_head=True).eval()
     x = torch.randn(1, 4096, POS_DIM + N_CASE_PARAMS)
@@ -106,9 +97,7 @@ def test_qw_head_is_insensitive_to_node_count():
 #                                       run capture
 # ============================================================================================
 
-# training happens on rented machines, and pushing the notebook again destroys
-# their output. anything these assertions let through costs another session of
-# quota to recover.
+# A capture bug costs a Kaggle session to recover: pushing the notebook again destroys its output.
 
 def _fake_batch(n_nodes: int = 32, qw: float = 0.5) -> dict:
     x = torch.randn(1, n_nodes, POS_DIM + N_CASE_PARAMS)
@@ -130,7 +119,6 @@ def test_epoch_record_carries_every_cheap_scalar(qw_weight):
 
 
 def test_grad_norm_is_measured_even_without_clipping():
-    """A grad_clip of zero or less must still report the norm rather than zero."""
     model = _model(qw_head=False)
     opt = torch.optim.AdamW(model.parameters(), lr=1e-4)
     rec = train_one_epoch(model, [_fake_batch()], opt, "cpu", 0.0)
@@ -165,7 +153,6 @@ def test_collect_env_records_code_version():
     env = collect_env("cpu")
     for key in ("python", "torch", "device", "cuda_available", "git_commit"):
         assert key in env
-    # a run traced to a commit is reproducible; one that is not, is not
     assert env["git_commit"] is None or len(env["git_commit"]) == 40
 
 
@@ -186,8 +173,7 @@ def test_parse_run_dir_rejects_unparseable_names():
 
 def test_tier_mean_rl2_averages_common_channels_only():
     recs = [{"rL2": {"rho": 0.1, "u": 0.2, "v": 0.3, "T": 0.4, "p": 9.9}}]
-    # pressure is excluded, which keeps a five-channel cell comparable to a
-# four-channel one
+    # pressure is excluded so a five-channel cell compares with a four-channel one
     assert tier_mean_rl2(recs, TARGET_ORDER) == pytest.approx(0.25)
 
 
@@ -201,7 +187,6 @@ def test_qw_columns_use_their_own_truths():
              "qw_ledger": 2.7e6, "qw_head_pred": 2.7e6}]
     assert qw_abs_rel_median(recs, "qw_pred", "qw_true") == pytest.approx(0.1)
     assert qw_abs_rel_median(recs, "qw_head_pred", "qw_ledger") == pytest.approx(0.0)
-    # against the wrong truth the head would look wrong by a factor of 26
     assert qw_abs_rel_median(recs, "qw_head_pred", "qw_true") > 20
 
 

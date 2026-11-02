@@ -1,31 +1,12 @@
 """Deep-ensemble uncertainty: spread calibration and the decision rule.
 
-The script reads K run directories written by ``scripts/train.py``. Every member
-must share a ``--seed`` and a slice count and differ only in ``--init-seed``. The
-run at ``--init-seed 0`` counts as one member. The work happens in two stages.
-
-Stage one is inference. It rebuilds the shared splits, runs every member over
-every case in every evaluation tier, and writes ``ensemble_per_case.json``. That
-file holds, per case, the relative L2 of the ensemble mean per channel, the
-ensemble spread per channel, the relative L2 of each member, the envelope
-distance, and the Knudsen number. The validation split is included here, because
-it calibrates the thresholds. Spread is ``||std over members|| / ||truth||`` per
-channel, which puts it in the same units as the relative L2 and makes the two
-directly comparable. A graphics card speeds this up, and the model is small
-enough at half a million parameters that a processor also finishes it.
-
-Stage two is analysis. It is fast and it runs again from the JSON file alone
-through ``--per-case``. It produces the table that compares the ensemble against
-a single member, the calibration of spread against error as a Spearman rank
-correlation per tier and a figure of binned medians, and the decision table.
-
-The decision rule refuses an input when the envelope guard fails, meaning a
-distance past 0.07 of the box width or a Knudsen number above 0.01, and also when the
-spread passes the refuse threshold. It warns when the spread passes the warn
-threshold, and trusts otherwise. The default thresholds come from the spread
-distribution on the validation split, at its 90th percentile and four times
-that, and the script prints both. Look at the calibration figure first, then
-override them with ``--warn-spread`` and ``--refuse-spread``.
+Inference runs every member over every evaluation tier and the validation
+split and writes ``ensemble_per_case.json``. The members are run directories of
+``scripts/train.py`` that share ``--seed`` and the slice count. Spread is
+``||std over members|| / ||truth||`` per channel, in the units of the relative
+L2. The analysis, which ``--per-case`` reruns from that file alone, prints the
+ensemble against single members, the Spearman rank correlation of spread
+against error per tier, and the decision table, and writes ``thresholds.json``.
 
 Usage
 -----
@@ -44,10 +25,6 @@ import argparse
 import json
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from scipy.stats import spearmanr
@@ -203,49 +180,6 @@ def decision_table(recs: list[dict], thresholds: dict[str, float]) -> str:
 
 
 # ============================================================================================
-#                                       calibration figure
-# ============================================================================================
-
-def calibration_figure(recs: list[dict], fig_out: Path,
-                       warn: float, refuse: float) -> None:
-    """Plot the error of each case against its ensemble spread.
-
-    Both axes are logarithmic, and a binned median runs through the cloud.
-    """
-    fig, ax = plt.subplots(figsize=(7, 4.5))
-    for split in tiers_present(recs):
-        rows = [r for r in recs if r["split"] == split]
-        ax.scatter([channel_mean(r["spread"]) for r in rows],
-                   [channel_mean(r["rL2_ens"]) for r in rows],
-                   s=18, alpha=0.7, label=tier_label(split))
-
-    rows = [r for r in recs if r["split"] != "val"]
-    s = np.array([channel_mean(r["spread"]) for r in rows])
-    e = np.array([channel_mean(r["rL2_ens"]) for r in rows])
-    edges = np.quantile(s, np.linspace(0, 1, 7))
-    mids, meds = [], []
-    for lo, hi in zip(edges[:-1], edges[1:]):
-        mask = (s >= lo) & (s <= hi)
-        if mask.sum() == 0:
-            continue
-        mids.append(np.sqrt(lo * hi) if lo > 0 else hi / 2)
-        meds.append(np.median(e[mask]))
-    ax.plot(mids, meds, "k--", lw=1, label="binned median")
-    ax.axvline(warn, color="orange", lw=1.2, label=f"warn s = {warn:.3f}")
-    ax.axvline(refuse, color="crimson", lw=1.2, label=f"refuse s = {refuse:.3f}")
-    ax.set_xscale("log")
-    ax.set_yscale("log")
-    ax.set_xlabel("ensemble spread (channel-mean ||std|| / ||truth||)")
-    ax.set_ylabel("per-case mean rel-L2 of the ensemble mean")
-    ax.set_title("Deep-ensemble spread vs actual error")
-    ax.legend(fontsize=8)
-    fig.tight_layout()
-    fig_out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(fig_out, dpi=150)
-    plt.close(fig)
-
-
-# ============================================================================================
 #                                       main
 # ============================================================================================
 
@@ -266,7 +200,6 @@ def main() -> None:
     p.add_argument("--refuse-spread", type=float, default=None,
                    help="spread above which the decision is refuse; the default is "
                         "four times the warn threshold")
-    p.add_argument("--fig-out", default="data/samples/spread_calibration.png")
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--pinned-splits", default=None, metavar="JSON",
                    help="take the split membership from an earlier run, so that the "
@@ -304,9 +237,6 @@ def main() -> None:
     print(calibration_stats(recs))
     print("\n## Trust/warn/refuse (eval tiers, actual error per bucket)\n")
     print(decision_table(recs, thresholds))
-
-    calibration_figure(recs, Path(args.fig_out), thresholds["warn"], thresholds["refuse"])
-    print(f"\ncalibration figure -> {args.fig_out}")
 
 
 if __name__ == "__main__":

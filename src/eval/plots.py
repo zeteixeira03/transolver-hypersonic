@@ -1,13 +1,4 @@
-"""
-Acceptance figure for AirfRANS: the prediction beside the ground truth on one
-held-out airfoil. The left panel carries the surface pressure coefficient
-against x, and the right panel carries the velocity magnitude field.
-
-AirfRANS stores pressure divided by specific mass, in m^2/s^2. The freestream
-pressure is zero in that form, so the pressure coefficient reduces to
-
-    Cp = (p / rho) / (0.5 * U_inf^2).
-"""
+"""Plot helpers for sphere-cone fields and the AirfRANS acceptance figure."""
 
 from __future__ import annotations
 
@@ -16,9 +7,33 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+from matplotlib.colorbar import Colorbar
+from matplotlib.path import Path as Polygon
+from matplotlib.ticker import FuncFormatter, LogLocator
+from matplotlib.tri import Triangulation
 
 from src.data.airfrans import AirfRANSDataset, NormStats, denormalize_targets
 from src.eval.metrics import relative_l2
+
+# ============================================================================================
+#                                   sphere-cone field plots
+# ============================================================================================
+
+
+def masked_triangulation(x: np.ndarray, r: np.ndarray, outline: np.ndarray) -> Triangulation:
+    """Delaunay triangulation, masking triangles whose centroid lies inside ``outline``."""
+    tri = Triangulation(x, r)
+    centroids = np.c_[x[tri.triangles].mean(axis=1), r[tri.triangles].mean(axis=1)]
+    tri.set_mask(Polygon(outline).contains_points(centroids))
+    return tri
+
+
+def decade_ticks(cb: Colorbar) -> None:
+    """Put a log colour bar's ticks at 1 and 3 of every decade, written as plain numbers."""
+    cb.locator = LogLocator(base=10, subs=(1.0, 3.0))
+    cb.formatter = FuncFormatter(lambda v, _: f"{v:g}")
+    cb.update_ticks()
+    cb.minorticks_off()
 
 
 # ============================================================================================
@@ -30,22 +45,10 @@ def surface_cp(
     inlet_velocity: torch.Tensor,
 ) -> np.ndarray:
     """
-    Pressure coefficient at the points that lie on the airfoil.
+    Pressure coefficient at the airfoil points, ``(p / rho) / (0.5 U_inf^2)``.
 
-    Parameters
-    ----------
-    pred_or_true : torch.Tensor
-        Per-point target tensor of shape (N, 4) in physical units. Column 2
-        holds pressure divided by density.
-    surface : torch.Tensor
-        Boolean mask of shape (N,) marking airfoil surface points.
-    inlet_velocity : torch.Tensor
-        Per-point inlet velocity (N, 2). Magnitude is uniform per simulation.
-
-    Returns
-    -------
-    np.ndarray
-        Cp values of length M = surface.sum().
+    AirfRANS stores pressure over density (column 2 of the (N, 4) targets) with
+    zero freestream pressure.
     """
     if not surface.any():
         return np.array([])
@@ -67,9 +70,9 @@ def plot_acceptance(
     save_path: Path | str | None = None,
 ) -> tuple[plt.Figure, dict[str, float]]:
     """
-    Build the two-panel acceptance figure for one held-out simulation.
+    Surface pressure coefficient and velocity magnitude for one held-out simulation.
 
-    Returns the figure and the relative L2 values that its panel titles carry.
+    Returns the figure and the relative L2 values in its titles.
     """
     model.eval()
     item = dataset[sim_index]
@@ -84,15 +87,10 @@ def plot_acceptance(
     pred = denormalize_targets(model(x, pos=pos).squeeze(0), stats.to(device))
 
     rl2_full = relative_l2(pred, y_true).cpu().numpy()
-    # only pressure gets a surface score; see evaluate_airfrans
     rl2_surf_p = (float(relative_l2(pred[surface, 2:3], y_true[surface, 2:3])[0])
                   if surface.any() else float("nan"))
 
-    # panel 1: the surface pressure coefficient against x. the sign of the y
-    # component of the surface normal splits upper from lower, so each side
-    # draws as one curve with a single value per x rather than one line that
-    # crosses back and forth. the normals sit in columns 5 and 6 of the raw
-    # array.
+    # the sign of the normal's y component (raw column 6) splits upper from lower
     surf_mask = item["surface"].cpu().numpy()
     surface_xy = pos_np[surf_mask]
     raw = dataset.arrays[sim_index]
@@ -102,7 +100,6 @@ def plot_acceptance(
     cp_true = surface_cp(y_true, surface, inlet.to(device))
     cp_pred = surface_cp(pred, surface, inlet.to(device))
 
-    # panel 2: the velocity magnitude field
     u_true = y_true[:, :2].pow(2).sum(dim=-1).sqrt().cpu().numpy()
     u_pred = pred[:, :2].pow(2).sum(dim=-1).sqrt().cpu().numpy()
 

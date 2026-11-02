@@ -1,10 +1,7 @@
 """Streamlit dashboard for the hypersonic sphere-cone flow surrogate.
 
-Four sliders drive a deep-ensemble prediction of the steady flow field around
-an axisymmetric re-entry capsule. The page reports the field, a verdict of
-trust, warn or refuse that reads the ensemble uncertainty, and two analytical
-cross-checks. One prediction meshes the geometry and runs five Transolver
-members on the processor, so the run button holds it behind a spinner.
+One prediction meshes the geometry and runs five Transolver members on the
+processor, so it waits for the run button.
 """
 from __future__ import annotations
 
@@ -16,10 +13,11 @@ import numpy as np
 import streamlit as st
 from inference import R_B_RATIO, R_S_RATIO, load_default_ensemble, predict
 from matplotlib.colors import LogNorm, Normalize
-from matplotlib.tri import Triangulation
 
 from src.data.sampler import FS_BOX, GEOM_BOX, KN_MAX, T_WALL
+from src.eval.plots import decade_ticks, masked_triangulation
 from src.eval.uncertainty import GUARD_DIST
+from src.geometry.sphere_cone import body_outline
 
 # ============================================================================================
 #                                       page config
@@ -28,7 +26,7 @@ from src.eval.uncertainty import GUARD_DIST
 st.set_page_config(page_title="Hypersonic sphere-cone surrogate", layout="wide")
 
 FIELD_META = {
-    "T": ("Temperature", "K", False),
+    "T": ("Temperature", "K", True),
     "rho": ("Density", "kg/m³", True),
     "p": ("Pressure", "Pa", True),
     "u": ("Axial velocity", "m/s", False),
@@ -43,7 +41,6 @@ DECISION_STYLE = {
                "ensemble disagrees strongly. Run a full simulation instead."),
 }
 
-# the training box per exposed control, shown under each slider
 ENVELOPE_BOX = {
     "mach": FS_BOX["mach"],
     "altitude": FS_BOX["altitude"],
@@ -84,16 +81,18 @@ def cached_predict(R_n_mm: float, theta_c: float, mach: float, altitude: float):
 #                                       plotting
 # ============================================================================================
 
-def field_figure(coords: np.ndarray, values: np.ndarray, name: str, R_b: float) -> plt.Figure:
+def field_figure(coords: np.ndarray, values: np.ndarray, name: str,
+                 params: dict[str, float]) -> plt.Figure:
     label, unit, log = FIELD_META[name]
+    R_b = params["R_b"]
     x, r = coords[:, 0], coords[:, 1]
-    # mirror the upper half across the axis, so the figure shows the whole body
     xx = np.concatenate([x, x])
     rr = np.concatenate([r, -r])
     vv = np.concatenate([values, values])
-    tri = Triangulation(xx, rr)
+    outline = body_outline(params["R_n"], params["theta_c_deg"], R_b, params["R_s"])
+    tri = masked_triangulation(xx, rr, outline)
 
-    fig, ax = plt.subplots(figsize=(7.2, 5.0))
+    fig, ax = plt.subplots(figsize=(4.4, 5.0))
     vmin = float(np.nanmin(values))
     vmax = float(np.nanmax(values))
     if log:
@@ -106,11 +105,12 @@ def field_figure(coords: np.ndarray, values: np.ndarray, name: str, R_b: float) 
     cf = ax.tricontourf(tri, np.clip(vv, vmin, vmax), levels=levels, norm=norm, cmap="inferno")
     cb = fig.colorbar(cf, ax=ax, shrink=0.9)
     cb.set_label(f"{label} [{unit}]")
+    if log:
+        decade_ticks(cb)
+    ax.fill(outline[:, 0], outline[:, 1], color="#d1d5db")
     ax.set_aspect("equal")
-    # crop to the region near the body. the domain reaches about 8 R_b into the
-    # far field, so most of a full frame would be undisturbed freestream. x_base
-    # is the downstream end of the mesh, and the window holds a few base radii
-    # around the forebody.
+    # the domain reaches about 8 R_b into the far field; x_base is the
+    # downstream end of the mesh
     x_base = float(x.max())
     ax.set_xlim(x_base - 1.15 * R_b, x_base + 0.05 * R_b)
     ax.set_ylim(-1.2 * R_b, 1.2 * R_b)
@@ -175,7 +175,6 @@ if pred is None:
     st.info("Set a flight condition in the sidebar and press **Run prediction**.")
     st.stop()
 
-# decision banner
 label, color, blurb = DECISION_STYLE[pred["decision"]]
 st.markdown(
     f"<div style='padding:0.8rem 1rem;border-radius:0.5rem;background:{color}22;"
@@ -186,8 +185,10 @@ st.markdown(
 )
 
 g1, g2, g3, g4 = st.columns(4)
-g1.metric("Envelope distance", f"{pred['distance']:.3f}", help=("largest excess of any input over the training box, as a fraction of "
-                 f"its width; refuse above {GUARD_DIST}"))
+g1.metric("Envelope distance", f"{pred['distance']:.3f}", help=(
+    "largest excess of any input over the range the training cases span, as a fraction of "
+    f"that range; refuse above {GUARD_DIST}. The training cases do not reach every edge of "
+    "the training box, so a value near the edge can be refused"))
 g2.metric("Knudsen number", f"{pred['kn']:.4f}", help=f"the continuum equations stop applying above {KN_MAX}")
 g3.metric("Ensemble spread", f"{pred['spread']:.3f}", help=f"warn at {get_ensemble()[1]['warn']:.3f}")
 g4.metric("Mesh nodes", f"{pred['n_nodes']:,}")
@@ -199,7 +200,7 @@ with left:
     st.subheader("Flow field")
     field = st.selectbox("Field", list(FIELD_META.keys()),
                          format_func=lambda k: f"{FIELD_META[k][0]} ({k})")
-    st.pyplot(field_figure(pred["coords"], pred["fields"][field], field, pred["params"]["R_b"]))
+    st.pyplot(field_figure(pred["coords"], pred["fields"][field], field, pred["params"]))
 
 with right:
     st.subheader("Quantities of interest")

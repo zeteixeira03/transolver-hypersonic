@@ -1,34 +1,20 @@
 """
 SU2 hypersonic sphere-cone dataset for surrogate training.
 
-Each training case is one converged SU2 axisymmetric sphere-cone simulation,
-stored as a compressed .npz produced by
-:func:`src.cfd.postprocess.extract_training_tensors`. Fields per case:
+One compressed .npz per case, from
+:func:`src.cfd.postprocess.extract_training_tensors`:
 
     x, r                            -- node coordinates, shape (N,)
     rho, u, v, T                    -- primitive flow fields, shape (N,)
     case_params                     -- 8 case parameters, shape (8,)
 
-Pressure is not stored; it is reconstructed at inference time as
-``p = rho * R_specific * T``, so the equation of state holds exactly.
-
-Inputs to the model are per-node and stack as
+Model inputs per node are
 
     [x, r, R_n, theta_c, R_b, R_s, M, T_inf, p_inf, T_w]    (10 channels)
 
-with the 8 case parameters broadcast from shape (8,) to (N, 8). Outputs are
-``[rho, u, v, T]`` (4 channels) per node.
-
-One alternative layout exists. With ``with_p`` set, p becomes a fifth free
-output channel and its target is ``rho R T`` from the stored fields. That
-layout measures what the hard equation-of-state constraint is worth. It is not
-the project default.
-
-The dataset loads one .npz file per call to ``__getitem__`` rather than holding
-every case in memory. A case carries about 60000 nodes across six float32
-fields, so it costs about 1.4 MB on disk and about 1 GB across the 753-case
-sweep. That fits a four-core machine on disk. As float tensors in memory it
-does not.
+and outputs ``[rho, u, v, T]``. With ``with_p``, pressure is a fifth free
+output with target ``rho R T``, to measure what the exact equation of state is
+worth.
 """
 
 from __future__ import annotations
@@ -54,11 +40,6 @@ CASE_PARAM_ORDER = (
 N_CASE_PARAMS = len(CASE_PARAM_ORDER)
 POS_DIM = 2                                   # (x, r)
 TARGET_ORDER = ("rho", "u", "v", "T")
-
-# the free-pressure layout drops the equation-of-state constraint and lets the
-# network emit pressure as a fifth channel. everywhere else the project
-# reconstructs it from density and temperature. this layout exists to measure
-# what that constraint is worth.
 TARGET_ORDER_WITH_P = TARGET_ORDER + ("p",)
 
 
@@ -67,29 +48,18 @@ TARGET_ORDER_WITH_P = TARGET_ORDER + ("p",)
 #                                       normalization stats
 # ============================================================================================
 
-# density and temperature are standardized in log10 space by default. a study
-# over 21 cases (data/samples/normalization_study.png) measured why. under
-# plain standardization density has a skew of 7.0, holds 91% of nodes inside
-# |z| < 0.5, and trails a 25-sigma tail through the shock layer; temperature
-# reaches 29450 K with a 4-sigma tail. log10 flattens both to a maximum |z|
-# under 4 and a skew under 0.6. the two velocity components need no such
-# treatment.
+# measured over 21 cases (data/samples/normalization_study.png): plain
+# standardization leaves density with skew 7.0 and a 25-sigma shock-layer
+# tail, temperature (to 29450 K) with a 4-sigma tail. log10 brings both under
+# |z| = 4 and skew 0.6.
 DEFAULT_LOG_TARGETS = ("rho", "T")
-# pressure runs from about 10 Pa in the freestream to about 1e6 Pa at
-# stagnation. the default layout reconstructs it from log-space density and
-# temperature, so a log-space pressure channel keeps the two layouts
-# comparable.
+# pressure spans about 10 Pa to 1e6 Pa
 DEFAULT_LOG_TARGETS_WITH_P = ("rho", "T", "p")
 
 
 @dataclass
 class SU2NormStats:
-    """Per-channel mean and std for inputs and targets.
-
-    Inputs hold 10 channels, ``[x, r, R_n, theta_c, R_b, R_s, M, T_inf, p_inf,
-    T_w]``. Targets hold ``[rho, u, v, T]``, and ``p`` as well under the
-    free-pressure layout. Each channel is standardized on its own.
-    """
+    """Per-channel mean and standard deviation for inputs and targets."""
 
     x_mean: torch.Tensor   # (10,)
     x_std: torch.Tensor    # (10,)
@@ -125,8 +95,6 @@ class SU2NormStats:
     @classmethod
     def load(cls, path: str | Path) -> SU2NormStats:
         d = torch.load(str(path), map_location="cpu")
-        # a saved file may omit "targets" and "log_targets"; both fall back to
-        # the four-channel layout
         return cls(d["x_mean"], d["x_std"], d["y_mean"], d["y_std"],
                    tuple(d.get("log_targets", ())),
                    tuple(d.get("targets", TARGET_ORDER)))
@@ -137,11 +105,7 @@ def transform_targets(
     log_targets: tuple[str, ...],
     targets: tuple[str, ...] = TARGET_ORDER,
 ) -> np.ndarray:
-    """Map physical targets into the space the statistics are fit in.
-
-    Channels named in ``log_targets`` pass through log10. The clip at 1e-30
-    keeps a zero or a negative value from producing a non-finite result.
-    """
+    """Take log10 of the channels named in ``log_targets``, clipped at 1e-30."""
     y = y_raw.copy()
     for i, name in enumerate(targets):
         if name in log_targets:
@@ -154,12 +118,7 @@ def transform_targets(
 # ============================================================================================
 
 def load_case_npz(path: str | Path) -> dict[str, np.ndarray]:
-    """Load one case.npz and return its arrays.
-
-    A missing ``case_params`` array raises ``ValueError``. Every case tensor
-    must describe itself, so that training reads no separate ledger and no
-    separate manifest.
-    """
+    """Load one case.npz as float32 arrays. Raises if ``case_params`` is missing."""
     d = np.load(str(path))
     required = ("x", "r", "rho", "u", "v", "T", "case_params")
     missing = [k for k in required if k not in d.files]
@@ -181,24 +140,7 @@ def stack_case_features(
     case_data: dict[str, np.ndarray],
     with_p: bool = False,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Build per-node (inputs, targets) for one case.
-
-    Parameters
-    ----------
-    case_data : dict
-        Arrays from :func:`load_case_npz`.
-    with_p : bool
-        Append pressure as a fifth target channel. The files store only
-        (rho, u, v, T). The ground truth is a calorically perfect ideal gas,
-        so ``rho R T`` reproduces the pressure SU2 itself computed.
-
-    Returns
-    -------
-    x : np.ndarray, shape (N, 10)
-        Stacked ``[x, r, ...case_params (broadcast)]``.
-    y : np.ndarray, shape (N, 4) or (N, 5)
-        Stacked ``[rho, u, v, T]``, plus ``p`` when requested.
-    """
+    """Build per-node inputs (N, 10) and targets (N, 4), or (N, 5) with ``with_p``."""
     x_node = case_data["x"]
     r_node = case_data["r"]
     params = case_data["case_params"]                          # (8,)
@@ -225,26 +167,11 @@ def compute_norm_stats(
     log_targets: tuple[str, ...] | None = None,
     with_p: bool = False,
 ) -> SU2NormStats:
-    """Compute the per-channel mean and standard deviation over training points.
+    """Per-channel mean and standard deviation over the training cases in ``paths``.
 
-    The function reads one case at a time, so peak memory does not grow with
-    the number of cases. It merges the per-case ``(mean, M2, count)`` summaries
-    with the parallel form of the Welford update.
-
-    Parameters
-    ----------
-    paths : list of paths
-        One ``case.npz`` per training case. Pass the training split alone. A
-        validation or test point folded into these statistics leaks held-out
-        information and inflates the reported accuracy.
-    eps : float
-        Added to the standard deviation, so that a constant channel does not
-        divide by zero.
-    log_targets : tuple of str, optional
-        Channels to standardize in log10 space. None takes the default for the
-        active layout. An empty tuple applies plain standardization throughout.
-    with_p : bool
-        Fit statistics for the five-channel layout that carries pressure.
+    Reads one case at a time and merges them with the parallel Welford update.
+    ``log_targets=None`` takes the default for the layout, and an empty tuple
+    standardizes every channel plainly.
     """
     targets_order = TARGET_ORDER_WITH_P if with_p else TARGET_ORDER
     if log_targets is None:
@@ -304,28 +231,13 @@ def compute_norm_stats(
 # ============================================================================================
 
 class SU2Dataset(Dataset):
-    """Disk-backed dataset over per-case ``case.npz`` files.
+    """Disk-backed dataset over per-case ``case.npz`` files, normalized with ``stats``.
 
-    Each call to ``__getitem__`` reads one case from disk and may draw a fixed
-    number of nodes from it. The returned tensors are normalized with
-    ``stats``.
-
-    Parameters
-    ----------
-    paths : list of paths
-        One ``case.npz`` per case.
-    stats : SU2NormStats
-        Normalization statistics fit on the training split.
-    subsample : int, optional
-        Draw this many nodes per item, uniform and without replacement. Each
-        call draws again, so every epoch sees a different subset.
-    qw_by_name : dict, optional
-        ``{case_name: q_w}`` in W/m^2, taken from the ledger. Items then carry
-        a ``qw`` scalar for the heat-flux head. A case absent from the map
-        gets NaN, which the heat-flux loss masks out.
-
-    ``stats.targets`` alone decides the target layout. One source of truth
-    leaves no second flag that can disagree with it.
+    A case holds about 60000 nodes, 1.4 MB on disk; the sweep is about 1 GB,
+    too large to hold in memory as tensors. ``subsample`` draws that many nodes
+    afresh on every call. ``qw_by_name`` maps case name to stagnation heat flux
+    in W/m^2; a missing case gets NaN, which the heat-flux loss masks out.
+    ``stats.targets`` decides the target layout.
     """
 
     def __init__(
@@ -384,11 +296,7 @@ class SU2Dataset(Dataset):
 # ============================================================================================
 
 def denormalize_targets(y_norm: torch.Tensor, stats: SU2NormStats) -> torch.Tensor:
-    """Map a normalized prediction or target back to physical units.
-
-    The function inverts the standardization first, then the log10 transform on
-    the channels named in ``stats.log_targets``.
-    """
+    """Map a normalized prediction or target back to physical units."""
     y = y_norm * stats.y_std.to(y_norm.device) + stats.y_mean.to(y_norm.device)
     mask = stats.log_mask.to(y_norm.device)
     if mask.any():
@@ -398,13 +306,7 @@ def denormalize_targets(y_norm: torch.Tensor, stats: SU2NormStats) -> torch.Tens
 
 
 def reconstruct_pressure(rho: torch.Tensor, T: torch.Tensor) -> torch.Tensor:
-    """Pressure from the ideal-gas equation of state, ``p = rho R_specific T``.
-
-    The model predicts ``(rho, u, v, T)`` and this function supplies ``p`` at
-    output time. The constraint is architectural rather than a penalty term.
-    The equation of state holds exactly at inference, because the network has
-    no degree of freedom with which to break it.
-    """
+    """Pressure from the ideal-gas equation of state, ``p = rho R_specific T``."""
     return rho * R_AIR * T
 
 
@@ -413,13 +315,10 @@ def reconstruct_pressure(rho: torch.Tensor, T: torch.Tensor) -> torch.Tensor:
 # ============================================================================================
 
 def list_case_npzs(workdir: str | Path) -> list[Path]:
-    """Return the sorted list of case tensors under ``workdir``.
+    """Return the case tensors under ``workdir`` sorted by case id, duplicates removed.
 
-    Three layouts appear in practice: ``case_XXXX/case.npz`` for a per-case run
-    directory, a flat ``case_XXXX.npz``, and ``cases/case_XXXX.npz`` inside an
-    unpacked archive. One directory can hold several at once, so the function
-    collects all three and removes duplicates by case id. The result is sorted
-    by case id, which keeps the order the same on every machine.
+    Accepts ``case_XXXX/case.npz``, ``case_XXXX.npz`` and ``cases/case_XXXX.npz``,
+    mixed in one directory.
     """
     workdir = Path(workdir)
     by_id: dict[int, Path] = {}
@@ -458,18 +357,12 @@ def split_paths(
 ) -> dict[str, list[Path]]:
     """Split the cases into training, validation and the evaluation tiers.
 
-    Inside the ``core`` group a seeded shuffle assigns whole geometries to one
-    split each. Cases that share a mesh sit close together in freestream space,
-    so splitting a geometry would leak between splits. Each extrapolation group
-    becomes a test tier of its own.
-
-    Above zero, ``interp_frac`` holds back that fraction of the cases on the
-    training geometries as ``test_interp``: seen shapes, unseen freestream. The
-    geometry shuffle runs first, so this never moves a geometry between the
-    validation and test splits.
-
-    Active-learning cases (``group_name == 'loop'``) always go to training and
-    stay out of the shuffle, so adding them leaves every held-out tier unchanged.
+    Core cases split by whole geometry, because cases on one mesh are close in
+    freestream space and would leak. Each extrapolation group is its own test
+    tier. ``interp_frac`` holds back that fraction of the training-geometry
+    cases as ``test_interp``: seen shapes, unseen freestream. ``loop`` cases
+    always go to training and stay out of the shuffle, so they leave every
+    held-out tier unchanged.
     """
     by_group: dict[str, list[Path]] = {"core": [], "loop": [], **{g: [] for g in OOD_GROUPS}}
     for p in paths:
@@ -513,9 +406,8 @@ def pin_splits(splits: dict[str, list[Path]], paths: list[Path],
                pinned: dict[str, list[str]]) -> dict[str, list[Path]]:
     """Replace the listed splits with fixed case lists, by case name.
 
-    A pinned list holds the exact membership of an earlier run, so a checkpoint
-    can be scored again on the same cases after the dataset grows. Names absent
-    from ``paths`` are dropped with a message.
+    Lets a checkpoint be scored on the same cases after the dataset grows.
+    Names absent from ``paths`` are dropped with a message.
     """
     by_name = {case_name(p): p for p in paths}
     out = dict(splits)

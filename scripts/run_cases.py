@@ -1,17 +1,10 @@
 """
 Resumable runner for the SU2 solve of dataset cases, with a one-line status.
 
-A case is solved in three jobs. The first-order start runs from the
-freestream. The fast job crosses the slow transient near the stagnation point
-with a high CFL number and no multigrid. The settle job brings the solution
-to rest, in rounds: after each round the wall heat flux is compared with its
-value 4000 iterations earlier, and the job runs another round while it still
-moves.
-
-Jobs live in a SQLite table in the work directory. A job waits for the job
-named in ``after`` and restarts from its solution. A killed run resumes where
-it stopped: ``run`` returns every job left ``running`` to ``pending``, and a job
-interrupted after SU2 wrote a restart file continues from that file.
+Each case is three chained jobs, a first-order start, a fast job and a settle
+job, held in a SQLite table in the work directory. ``run`` returns every job
+left ``running`` to ``pending``, and a job interrupted after SU2 wrote a
+restart file continues from that file.
 
 Usage
 -----
@@ -65,7 +58,7 @@ NO_RESIDUAL_STOP = {"CONV_RESIDUAL_MINVAL": "-14"}
 START = {"order": 1, "iter": 2500,
          "settings": {"CFL_ADAPT_PARAM": "( 0.5, 1.4, 0.1, 5.0 )", **NO_RESIDUAL_STOP}}
 
-# with a CFL cap of 5 the heat flux near the stagnation point climbs for more
+# with a Courant number cap of 5 the heat flux near the stagnation point climbs for more
 # than 30,000 iterations. a cap of 100 without multigrid crosses that in 8000,
 # but leaves cases with an easy nose up to 15% off, which the settle job removes
 FAST = {"order": 2, "iter": 8000,

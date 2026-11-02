@@ -1,13 +1,6 @@
-"""Unit tests for analytical hypersonic correlations.
+"""Analytical hypersonic correlations against published references.
 
-Where the reference values come from:
-
-- The Rayleigh-Pitot ratios are Table II of NACA Report 1135, at gamma = 1.4.
-- The Billig standoff is closed form and is checked against Equation 5.32 in
-  Anderson.
-- The Fay-Riddell value is computed by hand from the same formula at one
-  representative re-entry point, and the tests around it check that the trends
-  run the right way.
+Rayleigh-Pitot: NACA Report 1135, Table II, gamma = 1.4. Billig: Anderson, Equation 5.32.
 """
 
 from __future__ import annotations
@@ -29,7 +22,6 @@ from src.eval.sanity import THETA_C_BILLIG_MAX, compare_to_analytical
 # ============================================================================================
 
 def test_sutherland_reference_temperature():
-    # at T_REF the formula collapses to MU_REF
     mu = sutherland_mu(273.15)
     assert mu == pytest.approx(1.716e-5, rel=1e-9)
 
@@ -47,7 +39,7 @@ def test_sutherland_monotonic_in_temperature():
 @pytest.mark.parametrize(
     "M_inf, ratio_expected",
     [
-        (2.0, 5.6404),    # NACA 1135 Table II
+        (2.0, 5.6404),
         (5.0, 32.653),
         (10.0, 129.22),
         (20.0, 515.49),
@@ -69,7 +61,6 @@ def test_rayleigh_pitot_rejects_subsonic():
 # ============================================================================================
 
 def test_billig_high_mach_limit():
-    # at M -> infinity, delta/R_n -> 0.143 exactly
     delta = billig_standoff(1000.0, 1.0)
     assert delta == pytest.approx(0.143, rel=1e-4)
 
@@ -83,7 +74,7 @@ def test_billig_high_mach_limit():
     ],
 )
 def test_billig_closed_form(M_inf, expected_ratio):
-    R_n = 0.0254  # 1 inch nose, Anderson example scale
+    R_n = 0.0254  # one inch, the scale of Anderson's example
     delta = billig_standoff(M_inf, R_n)
     assert delta == pytest.approx(R_n * expected_ratio, rel=1e-9)
 
@@ -99,29 +90,21 @@ def test_billig_scales_with_nose_radius():
 # ============================================================================================
 
 def test_fay_riddell_reentry_regression():
-    """Mach 10, p_inf=100 Pa, T_inf=220 K, R_n=0.5 m, T_w=300 K.
-
-    Hand-computed against the same formula: ~0.25 MW/m^2. This pins the
-    constants and unit conventions. If you change any constant (R_AIR, CP_AIR,
-    PR_AIR, MU_REF, S_SUTH), update this expected value.
-    """
+    """Pins the constants and units against 0.25 MW/m^2, computed by hand from the same formula."""
     q_w = fay_riddell_qw(M_inf=10.0, T_inf=220.0, p_inf=100.0, R_n=0.5, T_w=300.0)
-    assert q_w == pytest.approx(2.5e5, rel=0.10)  # within 10% of the value computed by hand
+    assert q_w == pytest.approx(2.5e5, rel=0.10)
 
 
 def test_fay_riddell_magnitude_band():
-    # a hypersonic wall heat flux peaks between 1 and 100 MW/m^2. check that a
-    # more severe case still lands inside that band.
     q_w = fay_riddell_qw(M_inf=20.0, T_inf=250.0, p_inf=50.0, R_n=0.3, T_w=300.0)
-    assert 1e5 < q_w < 1e8
+    assert 1e5 < q_w < 1e8  # W/m^2
 
 
 def test_fay_riddell_decreases_with_nose_radius():
-    # q_w ~ 1 / sqrt(R_n) through the velocity gradient
+    # q_w scales as 1 / sqrt(R_n) through the stagnation velocity gradient
     q_small = fay_riddell_qw(10.0, 220.0, 100.0, 0.1, 300.0)
     q_large = fay_riddell_qw(10.0, 220.0, 100.0, 1.0, 300.0)
     assert q_small > q_large
-    # the ratio must land near sqrt(10) = 3.16
     assert q_small / q_large == pytest.approx(math.sqrt(10.0), rel=0.05)
 
 
@@ -149,8 +132,7 @@ def test_fay_riddell_rejects_subsonic():
 
 
 def _summary_with_bad_standoff(theta_c_deg):
-    """A case whose qw and p02 match the references exactly but whose standoff
-    is 2.3x Billig (the blunt-cone overshoot). Isolates the standoff gate."""
+    """Heat flux and stagnation pressure exact, standoff 2.3 times Billig (blunt-cone overshoot)."""
     M, T, p, R_n, T_w = 12.0, 250.0, 40.0, 0.015, 300.0
     ref_qw = fay_riddell_qw(M, T, p, R_n, T_w)
     ref_p02 = rayleigh_pitot_p02(M, p)
@@ -167,30 +149,25 @@ def _standoff_check(summary):
 
 
 def test_standoff_gated_for_slender_cone():
-    # below the cutoff Billig applies: a 2.3x standoff is a real miss
     s = _summary_with_bad_standoff(45.0)
     assert _standoff_check(s).applicable is True
     assert s["all_passed"] is False
 
 
 def test_standoff_not_applicable_for_blunt_cone():
-    # above the cutoff Billig is the wrong yardstick: standoff is reported but
-    # not gated, so the same 2.3x value does not fail the case
     s = _summary_with_bad_standoff(67.0)
     sd = _standoff_check(s)
     assert sd.applicable is False
     assert sd.passed is True
-    assert sd.rel_err == pytest.approx(1.3, rel=1e-6)  # still computed and reported
+    assert sd.rel_err == pytest.approx(1.3, rel=1e-6)
     assert s["all_passed"] is True
 
 
 def test_standoff_cutoff_is_inclusive():
-    # exactly at the cutoff Billig still applies
     assert _standoff_check(_summary_with_bad_standoff(THETA_C_BILLIG_MAX)).applicable is True
 
 
 def test_standoff_gated_when_theta_c_unknown():
-    # a caller that passes no cone angle gates the standoff at every angle
-    s = _summary_with_bad_standoff(None)
+    s =_summary_with_bad_standoff(None)
     assert _standoff_check(s).applicable is True
     assert s["all_passed"] is False

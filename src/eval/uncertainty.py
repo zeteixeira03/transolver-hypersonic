@@ -1,11 +1,7 @@
 """
 Deep-ensemble uncertainty and the rule that decides whether to trust a prediction.
 
-Several Transolvers that differ only in their starting weights and data order
-make an ensemble. Their mean is the prediction, and their spread is the
-uncertainty. A prediction is refused when the input lies outside the training
-envelope, when the flow is too rarefied for the continuum model, or when the
-members disagree strongly. Moderate disagreement earns a warning.
+Members differ only in starting weights and data order.
 """
 
 from __future__ import annotations
@@ -28,13 +24,13 @@ from src.data.su2 import (
 )
 from src.models.transolver import Transolver
 
-# refuse above this distance outside the training box. it marks where held-out
-# error starts to climb, so it moves as the extrapolation slabs gain cases.
+# where held-out error starts to climb; it moves as the extrapolation slabs grow
 GUARD_DIST = 0.07
 
 
 @dataclass
 class Ensemble:
+    """Ensemble members with their shared normalization and training envelope."""
     models: list[Transolver]
     stats: SU2NormStats
     envelope: dict[str, list[float]]
@@ -87,9 +83,9 @@ def predict_on_nodes(ens: Ensemble, coords: np.ndarray, params: dict[str, float]
 def spread(members: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
     """Per-channel spread: the norm of the member standard deviation over the reference norm.
 
-    In evaluation the reference is the true field. At inference no true field
-    exists, so the ensemble mean stands in for it. The two agree closely where
-    the ensemble is accurate, which keeps the calibrated thresholds usable.
+    The reference is the true field in evaluation and the ensemble mean at
+    inference. The two agree where the ensemble is accurate, so the calibrated
+    thresholds carry over.
     """
     return members.std(dim=0).pow(2).sum(dim=0).sqrt() / reference.pow(2).sum(dim=0).sqrt()
 
@@ -97,8 +93,7 @@ def spread(members: torch.Tensor, reference: torch.Tensor) -> torch.Tensor:
 def envelope_distance(params: dict[str, float], envelope: dict[str, list[float]]) -> float:
     """How far a case lies outside the training box, in units of each parameter's width.
 
-    Returns the largest excess over all parameters, or 0 inside the box. A
-    parameter held constant, such as the wall temperature, is skipped.
+    The largest excess over all parameters, 0 inside. Constant parameters are skipped.
     """
     d = 0.0
     for k in CASE_PARAM_ORDER:

@@ -38,6 +38,8 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["src*"]
+exclude = ["*__pycache__"]
+namespaces = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

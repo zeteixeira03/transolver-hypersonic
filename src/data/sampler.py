@@ -1,29 +1,11 @@
 """Sweep parameter sampler over geometry, freestream, and extrapolation slabs.
 
-The sampler nests two Latin hypercubes instead of drawing one joint hypercube,
-because the solver can only reuse work along one of the two axes. A change of
-geometry forces a new mesh and a cold solve. A change of freestream at fixed
-geometry keeps the mesh and restarts from the converged solution beside it. So
-the sampler draws
-
-    n_geom   geometries   -- a hypercube over (R_n, theta_c, R_b/R_n, R_s/R_b)
-    n_fs     freestreams  -- a hypercube over (altitude, M_inf) per geometry
-
-for ``n_geom * n_fs`` core cases. Cases that share a geometry come out
-consecutive, ordered by a greedy nearest-neighbour walk through freestream
-space. The first case of a geometry cluster solves cold and every later one
-restarts from the case before it. The nesting changes the order of the cases
-and not the coverage of the box, which matches a flat hypercube of the same
-size.
-
-Freestream temperature and pressure are not free parameters. A sampled altitude
-sets both through the US Standard Atmosphere 1976, which keeps every
-(T_inf, p_inf) pair physical. The wall stays at 300 K.
-
-Four thin slabs sit outside the core box and measure extrapolation: a large
-nose radius, a small nose radius, a high cone angle, and Mach above the core
-ceiling. Each slab is its own nested draw and carries its own tag, so the
-analysis can select on it.
+Two nested Latin hypercubes: one over geometry (R_n, theta_c, R_b/R_n,
+R_s/R_b), and per geometry one over freestream (altitude, M_inf). A new
+geometry needs a new mesh and a cold solve, while a new freestream on the same
+mesh can warm-start from its neighbour, so cases sharing a geometry come out
+consecutive in nearest-neighbour order. Altitude sets (T_inf, p_inf) through
+the US Standard Atmosphere 1976.
 """
 
 from __future__ import annotations
@@ -55,21 +37,7 @@ _G0 = 9.80665      # m/s^2
 
 
 def us_standard_atmosphere(h_km: float) -> tuple[float, float, float]:
-    """Return (T [K], p [Pa], rho [kg/m^3]) at geometric altitude ``h_km``.
-
-    The 1976 model holds from 0 to 86 km. Temperature runs linearly inside each
-    layer, and pressure follows the hydrostatic integral over that layer.
-
-    Parameters
-    ----------
-    h_km : float
-        Geometric altitude in kilometres.
-
-    Returns
-    -------
-    tuple of float
-        Static temperature, static pressure, density.
-    """
+    """Return (T [K], p [Pa], rho [kg/m^3]) at geometric altitude ``h_km`` in km, 0 to 86."""
     if not 0.0 <= h_km <= 86.0:
         raise ValueError("altitude must lie in [0, 86] km")
     base_h, base_T, lapse, base_p = _ATM_LAYERS[0]
@@ -101,18 +69,15 @@ GEOM_BOX = {
     "R_s_ratio": (0.05,  0.30),    # R_s / R_b
 }
 FS_BOX = {
-    # the 60 km ceiling is a pressure floor in disguise. it holds p_inf at or
-    # above about 22 Pa, and the laminar Navier-Stokes recipe collapses the bow
-    # shock onto the body below that. one collapsed case then spreads through
-    # its whole geometry cluster by warm restart, so the ceiling protects far
-    # more than the single case that would fail.
+    # the 60 km ceiling keeps p_inf above about 22 Pa. below that the recipe
+    # collapses the bow shock onto the body, and a collapsed case spreads
+    # through its geometry cluster by warm restart.
     "altitude":  (45.0,  60.0),    # km
     "mach":      (8.0,   25.0),
 }
 
-# each extrapolation slab overrides part of GEOM_BOX or FS_BOX and draws the
-# rest from the core boxes. they stay small on purpose: they measure
-# extrapolation and must not become training coverage.
+# each slab overrides part of the core boxes. they stay small because they
+# measure extrapolation and must not become training coverage.
 OOD_SLABS = {
     "nose_large": {"R_n":     (0.050, 0.100)},
     "nose_small": {"R_n":     (0.004, 0.010)},
@@ -122,12 +87,8 @@ OOD_SLABS = {
 
 T_WALL = 300.0  # K, fixed isothermal cold wall
 
-# continuum Navier-Stokes with a no-slip wall holds below this Knudsen number
-# on the nose radius. above it the wall slips and the shock layer merges with
-# the boundary layer, and every case measured above it came out broken. the
-# altitude ceiling in FS_BOX only approximates this limit, because a high Mach
-# number and a small nose radius together can cross it at 60 km. sample_cases
-# checks each case against the limit directly.
+# every case measured above this nose-radius Knudsen number came out broken.
+# high Mach with a small nose can cross it below the 60 km ceiling.
 KN_MAX = 0.01
 
 _GEOM_ORDER = ("R_n", "theta_c", "R_b_ratio", "R_s_ratio")
@@ -140,11 +101,7 @@ _FS_ORDER = ("altitude", "mach")
 
 @dataclass
 class CaseSpec:
-    """One sampled case with its group tag and its geometry-cluster id.
-
-    Each distinct meshed geometry has its own ``geom_id``. Cases that share a
-    ``geom_id`` share a mesh and can restart from one another.
-    """
+    """One sampled case with its group tag and geometry id, which names its mesh."""
     group: str
     geom_id: int
     case: Case
@@ -156,11 +113,7 @@ class CaseSpec:
 
 def case_params(R_n: float, theta_c: float, R_b_ratio: float, R_s_ratio: float,
                 mach: float, altitude: float) -> dict[str, float]:
-    """Turn the six design axes into the eight parameters of a case.
-
-    Freestream temperature and pressure follow the altitude through the standard
-    atmosphere, and the wall temperature is the fixed ``T_WALL``.
-    """
+    """Turn the six design axes into the eight parameters of a case."""
     T_inf, p_inf, _rho = us_standard_atmosphere(altitude)
     R_b = R_b_ratio * R_n
     return {"R_n": R_n, "theta_c_deg": theta_c, "R_b": R_b, "R_s": R_s_ratio * R_b,
@@ -176,11 +129,7 @@ def _scale(unit: np.ndarray, names: tuple[str, ...], box: dict) -> np.ndarray:
 
 
 def _nn_order(points: np.ndarray) -> list[int]:
-    """Greedy nearest-neighbour order over the rows of ``points``.
-
-    Each column is scaled to [0, 1] first, so no column dominates the distance
-    through its units alone. The walk starts at the row closest to the centroid.
-    """
+    """Greedy nearest-neighbour order over the rows of ``points``, columns scaled to [0, 1]."""
     n = len(points)
     if n <= 2:
         return list(range(n))
@@ -246,32 +195,10 @@ def sample_cases(
     n_fs_ood: int = 2,
     seed: int = 0,
 ) -> list[CaseSpec]:
-    """Build the sweep case list: the core block, then one extrapolation slab.
+    """Build the sweep case list: the core block, then each slab of :data:`OOD_SLABS`.
 
-    Parameters
-    ----------
-    n_geom : int
-        Geometries in the core block.
-    n_fs : int
-        Freestream points per core geometry. The core holds ``n_geom * n_fs``
-        cases.
-    n_geom_ood : int
-        Geometries per extrapolation slab.
-    n_fs_ood : int
-        Freestream points per slab geometry. One slab holds
-        ``n_geom_ood * n_fs_ood`` cases, so the four default slabs hold
-        ``4 * n_geom_ood * n_fs_ood`` between them.
-    seed : int
-        Seed for the hypercube engines. The same seed gives the same case list.
-
-    Returns
-    -------
-    list of CaseSpec
-        The core block first, then the slabs in :data:`OOD_SLABS` order. Inside
-        a block the cases group by geometry, the geometries follow a
-        nearest-neighbour walk, and the freestream points follow their own walk
-        inside a geometry. Consecutive cases in one cluster can therefore
-        restart from one another.
+    The core holds ``n_geom * n_fs`` cases and each slab ``n_geom_ood * n_fs_ood``,
+    less any case above :data:`KN_MAX`.
     """
     rng = np.random.default_rng(seed)
     specs, gid = _build_block("core", n_geom, n_fs, GEOM_BOX, FS_BOX, rng, 0)
@@ -280,10 +207,7 @@ def sample_cases(
         fb = {**FS_BOX, **{k: v for k, v in overrides.items() if k in FS_BOX}}
         block, gid = _build_block(name, n_geom_ood, n_fs_ood, gb, fb, rng, gid)
         specs.extend(block)
-    # drop any draw in the slip regime. both the solver model and the analytical
-    # gates are invalid above KN_MAX. the drop leaves gaps inside geometry
-    # clusters, and the restart chain in init_ledger spans them because it
-    # matches on geom_id rather than on adjacency.
+    # init_ledger chains restarts on geom_id, so the gaps this leaves are harmless
     specs = [
         s for s in specs
         if knudsen_number(s.case.mach, s.case.T_inf, s.case.p_inf, s.case.R_n) <= KN_MAX
@@ -292,24 +216,7 @@ def sample_cases(
 
 
 def partition(n_items: int, n_blocks: int) -> list[list[int]]:
-    """Split ``range(n_items)`` into ``n_blocks`` contiguous near-equal blocks.
-
-    Applied to the case order, one block is a contiguous run of geometry
-    clusters, so a worker that owns a block can warm-start inside it. A static
-    split needs no ledger shared between machines. A final pass collects
-    whatever a machine did not finish.
-
-    Parameters
-    ----------
-    n_items : int
-        Number of items to split.
-    n_blocks : int
-        Number of blocks (>= 1).
-
-    Returns
-    -------
-    list of list of int
-    """
+    """Split ``range(n_items)`` into ``n_blocks`` contiguous near-equal blocks."""
     if n_blocks < 1:
         raise ValueError("n_blocks must be >= 1")
     edges = np.linspace(0, n_items, n_blocks + 1, dtype=int)

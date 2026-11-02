@@ -1,9 +1,6 @@
-"""Tests for split_paths, especially the routing of active-learning cases.
+"""split_paths routing of active-learning cases, which arrive under ``group_name='loop'``.
 
-The active-learning loop appends cases under ``group_name='loop'``. At one seed
-the core validation, test and interpolation tiers must hold the same cases
-however many loop cases exist. Only then does a comparison across loop
-iterations mean anything.
+At one seed the core validation, test and interpolation tiers must not change as loop cases arrive.
 """
 
 from __future__ import annotations
@@ -22,7 +19,7 @@ def test_loop_cases_route_to_train_only():
     loop_ids = [900, 901, 902, 903, 904]
     paths = _fake_paths(core_ids + loop_ids)
     groups = {**{c: "core" for c in core_ids}, **{c: "loop" for c in loop_ids}}
-    geoms = {c: c // 10 for c in core_ids}  # 10 core geometries
+    geoms = {c: c // 10 for c in core_ids}
     splits = split_paths(paths, groups, geoms, val_frac=0.2, test_frac=0.2,
                          seed=0, interp_frac=0.1)
     loop_names = {f"case_{c:04d}" for c in loop_ids}
@@ -41,12 +38,10 @@ def test_core_splits_identical_with_and_without_loop_cases():
     loop_ids = [900, 901, 902, 903, 904]
     geoms = {c: c // 10 for c in core_ids}
 
-    # baseline: no loop cases
     paths_a = _fake_paths(core_ids)
     groups_a = {c: "core" for c in core_ids}
     splits_a = split_paths(paths_a, groups_a, geoms, 0.2, 0.2, seed=0, interp_frac=0.1)
 
-    # with loop cases
     paths_b = _fake_paths(core_ids + loop_ids)
     groups_b = {**groups_a, **{c: "loop" for c in loop_ids}}
     splits_b = split_paths(paths_b, groups_b, geoms, 0.2, 0.2, seed=0, interp_frac=0.1)
@@ -66,7 +61,7 @@ def test_core_splits_identical_with_and_without_loop_cases():
 
 def test_loop_cases_deterministic_order_in_train():
     core_ids = list(range(30))
-    loop_ids = [905, 902, 908, 900]  # out of order, to prove the split sorts them
+    loop_ids = [905, 902, 908, 900]  # unsorted on purpose
     geoms = {c: c // 10 for c in core_ids}
     paths = _fake_paths(core_ids + loop_ids)
     groups = {**{c: "core" for c in core_ids}, **{c: "loop" for c in loop_ids}}
@@ -74,7 +69,6 @@ def test_loop_cases_deterministic_order_in_train():
     train_names = [p.parent.name for p in splits["train"]]
     loop_positions = [train_names.index(f"case_{c:04d}") for c in sorted(loop_ids)]
     assert loop_positions == sorted(loop_positions), "loop cases not in case_id order"
-    # the loop cases sit together at the end of the training list
     tail = train_names[-len(loop_ids):]
     assert tail == [f"case_{c:04d}" for c in sorted(loop_ids)], (
         f"loop cases should be at the tail of train in case_id order; got tail={tail}"

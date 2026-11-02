@@ -54,11 +54,10 @@ def shock_standoff(coords: np.ndarray, rho: np.ndarray, R_n: float, rho_inf: flo
                    r_band: float = 0.10, n_bins: int = 200, thresh_ratio: float = 3.0) -> float:
     """Distance from the nose to the bow shock along the stagnation line, in metres.
 
-    The mesh holds too few nodes on the axis itself, so the function bins the
-    strip ``r < r_band R_n`` along x and takes the mean density per bin. The
-    shock is the most upstream bin whose density exceeds ``thresh_ratio`` times
-    the freestream value, with the crossing interpolated inside the bin. Returns
-    NaN when the strip holds too few nodes.
+    The mesh holds too few nodes on the axis itself, so the strip
+    ``r < r_band R_n`` is binned along x. The shock is the most upstream bin
+    whose mean density exceeds ``thresh_ratio`` times the freestream value,
+    interpolated inside the bin. NaN when the strip holds too few nodes.
     """
     mask = coords[:, 1] < r_band * R_n
     xs, rs = coords[mask, 0], rho[mask]
@@ -116,7 +115,7 @@ def predict(ens: Ensemble, thresholds: dict[str, float], R_n: float, theta_c_deg
     fields = {c: mean[:, j].cpu().numpy() for j, c in enumerate(TARGET_ORDER)}
     fields["p"] = reconstruct_pressure(mean[:, 0], mean[:, 3]).cpu().numpy()
 
-    # each member gets its own standoff, which gives a real band
+    # one standoff per member gives the band
     rho_inf = params["p_inf"] / (R_AIR * params["T_inf"])
     standoffs = [shock_standoff(coords, m[:, 0].cpu().numpy(), R_n, rho_inf) for m in members]
 

@@ -1,18 +1,9 @@
-"""SQLite work ledger for dataset generation.
+"""SQLite work ledger for dataset generation, one row per case.
 
-The ledger holds one row per attempted case. A worker claims the lowest-ordinal
-``pending`` row inside a single transaction, runs it, and writes back either
-``done`` with the three quantities the sanity checks need, or ``failed`` with
-the error text. At start-up a worker first reclaims every ``running`` row whose
-lease has expired, which is what lets the sweep resume after a hard
-interruption.
-
-Column ``ord`` holds the nearest-neighbour order, and column ``block`` splits
-that order into contiguous ranges. ``restart_from`` points at the previous case
-in the same block, so a worker can warm-start a solve from the converged
-solution beside it. It is NULL for the first case of a block and never crosses a
-block boundary, because two blocks can land on two different machines. A worker
-either takes one named block or takes any pending case.
+``ord`` is the nearest-neighbour run order and ``block`` splits it into
+contiguous ranges. ``restart_from`` names the previous case in the same block
+for a warm start. It never crosses a block boundary, because two blocks can
+run on two machines.
 """
 
 from __future__ import annotations
@@ -59,10 +50,8 @@ CREATE INDEX IF NOT EXISTS idx_status_ord ON cases (status, ord);
 """
 
 _CASE_COLS = ("R_n", "theta_c_deg", "R_b", "R_s", "mach", "T_inf", "p_inf", "T_w")
-# a claim increments attempts, so this budget counts interruptions rather than
-# solver failures. a case cut off part way through, by a power cycle or a
-# closed session, comes back to pending until it has been claimed this many
-# times. a real SU2 failure goes to mark_failed and never spends the budget.
+# counts claims, so it budgets interruptions (power cycles, closed sessions),
+# not solver failures, which go straight to mark_failed
 MAX_ATTEMPTS = 6
 
 
@@ -73,17 +62,11 @@ MAX_ATTEMPTS = 6
 def connect(db_path: str | Path) -> sqlite3.Connection:
     """Open the ledger in write-ahead log mode with a long busy timeout.
 
-    Several workers share one ledger file, so the timeout must outlast a slow
-    commit under contention.
-
-    ``synchronous=FULL`` is a requirement here and not a preference. It flushes
-    each commit to the device before the call returns, so ``mark_done`` survives
-    a power cycle. Under ``NORMAL`` a hard restart can discard a write-ahead log
-    that was never checkpointed and roll the ledger back by tens of cases. One
-    flush per case costs nothing against a solve that runs for hours. The
-    guarantee only holds on a physical disk: the virtual ext4 disk of the
-    Windows Subsystem for Linux ignores write barriers, so the working directory
-    must not live there.
+    ``synchronous=FULL`` is required: under ``NORMAL`` a hard restart can drop
+    an uncheckpointed write-ahead log and roll the ledger back by tens of
+    cases. This only holds on a physical disk. The virtual ext4 disk of the
+    Windows Subsystem for Linux ignores write barriers, so the ledger must not
+    live there.
     """
     con = sqlite3.connect(str(db_path), timeout=60.0)
     con.row_factory = sqlite3.Row
@@ -107,24 +90,11 @@ def init_ledger(
     specs: list[CaseSpec],
     n_blocks: int,
 ) -> None:
-    """Create or extend the ledger from an ordered list of case specifications.
+    """Create or extend the ledger from ``specs`` in run order.
 
-    A second call adds only what is new, because a row whose ``case_id`` already
-    exists is left alone. The columns follow from the list. ``case_id`` is the
-    position of the specification in ``specs``, which already carries the run
-    order, and ``ord`` repeats it. ``block`` comes from a split of the range
-    into ``n_blocks`` contiguous parts. ``restart_from`` names the previous case
-    only when that case shares both this ``geom_id`` and this ``block``, which
-    means one mesh and one machine.
-
-    Parameters
-    ----------
-    db_path : path
-        Ledger file. Created if absent.
-    specs : list of CaseSpec
-        The output of :func:`src.data.sampler.sample_cases`.
-    n_blocks : int
-        Number of contiguous blocks.
+    Existing ``case_id`` rows are left alone. ``case_id`` and ``ord`` are the
+    position in ``specs``. ``restart_from`` is set only when the previous case
+    shares both ``geom_id`` and ``block``.
     """
     blocks = partition(len(specs), n_blocks)
     block_of_pos = [0] * len(specs)
@@ -168,9 +138,8 @@ def init_ledger(
 def reclaim_stale(db_path: str | Path, max_age_s: float = 7200.0) -> int:
     """Reclaim ``running`` rows whose lease is older than ``max_age_s``.
 
-    A row that has spent :data:`MAX_ATTEMPTS` goes to ``failed`` rather than
-    back to ``pending``. Returns the number of rows changed. Call it once at
-    worker start-up.
+    A row that has spent :data:`MAX_ATTEMPTS` goes to ``failed`` instead of
+    ``pending``. Returns the number of rows changed.
     """
     now = time.time()
     con = connect(db_path)
@@ -198,22 +167,9 @@ def claim_next(
     worker: str,
     block: int | None = None,
 ) -> tuple[int, Case, int | None] | None:
-    """Atomically claim the lowest-ordinal ``pending`` case.
+    """Atomically claim the lowest-ordinal ``pending`` case, optionally in one block.
 
-    Parameters
-    ----------
-    db_path : path
-        Ledger file.
-    worker : str
-        Identifier written onto the claimed row, for example ``"oracle-3"``.
-    block : int, optional
-        If given, only claim cases in this block.
-
-    Returns
-    -------
-    tuple of (case_id, Case, restart_from) or None
-        ``None`` when no case remains to claim. ``restart_from`` holds the case
-        id to warm-start from, or ``None``.
+    Returns ``(case_id, case, restart_from)``, or None when nothing is pending.
     """
     con = connect(db_path)
     try:
@@ -284,12 +240,7 @@ def mark_failed(db_path: str | Path, case_id: int, error: str) -> None:
 # ============================================================================================
 
 def case_row(db_path: str | Path, case_id: int) -> sqlite3.Row | None:
-    """Return the full row for one case, or None if it is not in the ledger.
-
-    The warm-start guard reads ``status`` and ``checks_passed`` together. One
-    case may seed the next only when it finished without error and also cleared
-    the analytical gates.
-    """
+    """Return the full row for one case, or None if it is not in the ledger."""
     con = connect(db_path)
     try:
         return con.execute("SELECT * FROM cases WHERE case_id=?", (case_id,)).fetchone()
@@ -308,10 +259,7 @@ def status_counts(db_path: str | Path) -> dict[str, int]:
 
 
 def recent_done(db_path: str | Path, limit: int = 50) -> list[sqlite3.Row]:
-    """Return the cases that finished most recently, newest first.
-
-    The periodic quality gate reads this window.
-    """
+    """Return the cases that finished most recently, newest first."""
     con = connect(db_path)
     try:
         return con.execute(
@@ -334,8 +282,8 @@ def all_rows(db_path: str | Path) -> list[sqlite3.Row]:
 def read_cases(db_path: str | Path) -> dict[int, dict]:
     """Return every row as ``{case_id: {column: value}}`` without writing anything.
 
-    The connection opens read-only and immutable, which works on a read-only
-    mount such as a Kaggle input directory, where ``connect`` would fail.
+    Opens read-only and immutable, so it works on a read-only Kaggle input
+    mount where ``connect`` fails.
     """
     con = sqlite3.connect(f"file:{Path(db_path).as_posix()}?mode=ro&immutable=1", uri=True)
     con.row_factory = sqlite3.Row

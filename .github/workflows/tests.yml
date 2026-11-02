@@ -21,7 +21,5 @@ jobs:
         run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - name: Install package with cfd + dev extras
         run: pip install -e ".[cfd,dev]"
-      - name: Run test suite
+      - name: Run test suite, including the check that every README result table reproduces
         run: pytest tests/ -q
-      - name: Check that every README result table reproduces
-        run: python scripts/check_reproduces.py

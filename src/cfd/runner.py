@@ -1,22 +1,7 @@
 """Render an SU2 configuration from the sphere-cone template and run SU2_CFD.
 
-The entry point :func:`run_case` takes a set of case parameters and a run
-directory, and leaves behind:
-
-    <run_dir>/
-        case.su2              # mesh, written by mesh_sphere_cone
-        case.cfg              # rendered SU2 configuration
-        flow.vtu              # volume solution, Paraview format
-        surface_flow.vtu      # surface solution
-        surface_flow.csv      # surface scalar values per node
-        restart_flow.dat      # SU2 restart file
-        history.csv           # convergence history
-        su2.log               # standard output and error of SU2_CFD
-
-The runner reaches SU2_CFD two ways. On Linux and macOS it calls the binary
-directly, which needs SU2_CFD on the executable search path. On a Windows host
-it calls into the Windows Subsystem for Linux, which needs both ``wsl_distro``
-and ``conda_env``. Dataset generation on Kaggle takes the direct path.
+SU2_CFD runs directly when it is on the search path, and otherwise inside the
+Windows Subsystem for Linux given ``wsl_distro`` and ``conda_env``.
 """
 
 from __future__ import annotations
@@ -56,11 +41,10 @@ def render_cfg(
     restart_name: str = "restart_flow",
     settings: dict[str, str] | None = None,
 ) -> Path:
-    """Substitute concrete case values into the SU2 configuration template.
+    """Substitute case values into the SU2 configuration template and write it.
 
-    ``settings`` then sets any further SU2 option, as ``{"KEY": "value"}``: an
-    existing ``KEY=`` line is replaced, and a missing one is appended.
-    Returns the path of the written configuration file.
+    ``settings`` maps further SU2 options ``{"KEY": "value"}``: an existing
+    ``KEY=`` line is replaced, a missing one appended.
     """
     text = Path(template_path).read_text()
     replacements = {
@@ -116,24 +100,11 @@ def run_su2(
     log_filename: str = "su2.log",
     timeout: float | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run SU2_CFD on a rendered configuration file.
+    """Run SU2_CFD on a rendered configuration file, in its directory by default.
 
-    Parameters
-    ----------
-    cfg_path : path
-        The rendered SU2 configuration file. The run directory defaults to the
-        parent of this file.
-    wsl_distro : str, optional
-        Name of a Windows Subsystem for Linux distribution. When given, SU2_CFD
-        runs inside it and the configuration and mesh paths are translated to
-        their Linux form. A Windows host needs this.
-    conda_env : str, optional
-        Name of a conda environment to activate before SU2_CFD starts, such as
-        ``su2``.
-    nprocs : int
-        Above 1, the command becomes ``mpirun -np <nprocs> SU2_CFD``. The SU2
-        build in the chosen environment must carry Message Passing Interface
-        support.
+    With ``wsl_distro``, SU2_CFD runs inside that Linux distribution after
+    activating ``conda_env``. ``nprocs`` above 1 runs under ``mpirun`` and needs
+    an SU2 build with Message Passing Interface support.
     """
     cfg_path = Path(cfg_path)
     run_dir = Path(run_dir) if run_dir else cfg_path.parent
@@ -141,8 +112,6 @@ def run_su2(
     cfg_name = cfg_path.name
 
     if wsl_distro is None:
-        # direct call. the working directory is the run directory, and SU2_CFD
-        # must sit on the executable search path
         if shutil.which("SU2_CFD") is None:
             raise RuntimeError("SU2_CFD not found on PATH; set wsl_distro or activate the env")
         if nprocs > 1:
@@ -155,8 +124,6 @@ def run_su2(
                 check=False, timeout=timeout,
             )
 
-    # call through the Windows Subsystem for Linux: translate the paths, then
-    # assemble one bash command
     wsl_run_dir = _windows_to_wsl_path(run_dir)
     if conda_env:
         env_prefix = (
@@ -205,8 +172,7 @@ CANONICAL_CASE = Case(
 def detect_invocation() -> tuple[str | None, str | None]:
     """Return the Linux distribution and conda environment that hold SU2.
 
-    With ``SU2_CFD`` on the search path, as inside an active conda environment,
-    this returns ``(None, None)`` and the caller runs it directly.
+    ``(None, None)`` when ``SU2_CFD`` is already on the search path.
     """
     if shutil.which("SU2_CFD"):
         return None, None
@@ -234,29 +200,11 @@ def run_case(
     cfg_filename: str = "case.cfg",
     settings: dict[str, str] | None = None,
 ) -> dict:
-    """Run one sphere-cone hypersonic case from parameters to output files.
+    """Mesh, configure and solve one case, and return the paths of its outputs.
 
-    Four steps: mesh with gmsh, substitute the configuration template, run
-    SU2_CFD, and return the paths of everything written.
-
-    Parameters
-    ----------
-    case : Case
-        Case parameters.
-    run_dir : path
-        Directory for every file the run produces. Created if absent.
-    mesh_kwargs : dict, optional
-        Extra keyword arguments passed on to :func:`mesh_sphere_cone`, such as
-        ``L_far``, ``h_wall`` and ``bl_first_height``.
-    muscl : bool
-        True runs second order with the configured slope limiter. False runs
-        first order, which is what a hypersonic case needs from a cold start.
-    restart_sol : bool
-        True makes SU2 take its initial condition from an existing
-        ``solution_flow.dat``. The second-order pass of a two-pass solve sets
-        this.
-    write_mesh : bool
-        False expects ``case.su2`` to exist in ``run_dir`` already.
+    ``muscl=False`` runs first order, which a hypersonic case needs from a cold
+    start. ``restart_sol=True`` starts from ``solution_flow.dat`` in ``run_dir``.
+    ``write_mesh=False`` reuses an existing ``case.su2``.
     """
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)

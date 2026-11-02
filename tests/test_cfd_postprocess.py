@@ -1,7 +1,6 @@
-"""Tests for the readers of SU2 output.
+"""Readers of SU2 output: surface file parser, stagnation node pick, shock standoff finder.
 
-They cover the surface .csv parser, the choice of stagnation node, and the
-shock-standoff finder. Every input here is synthetic, so no SU2 run is needed.
+Every input is synthetic.
 """
 
 from __future__ import annotations
@@ -54,7 +53,7 @@ def test_extract_surface_requires_xy(tmp_path):
 
 def test_extract_surface_quoted_header(tmp_path):
     p = tmp_path / "surface_flow.csv"
-    # SU2 sometimes writes quoted column names
+    # SU2 sometimes quotes column names
     with open(p, "w") as f:
         f.write('"x","y","Pressure","Heat_Flux"\n')
         f.write("0.0,0.0,12345.0,2.5e5\n")
@@ -67,14 +66,13 @@ def test_extract_surface_vtu_roundtrip(tmp_path):
     pv = pytest.importorskip("pyvista", reason="pyvista not available")
     import vtk  # noqa: F401  -- pyvista needs vtk present
 
-    # build an unstructured grid from two line cells, which is the shape SU2
-    # writes into surface_flow.vtu
+    # SU2 writes surface_flow.vtu as line cells
     pts = np.array([
         [0.0,   0.0,   0.0],
         [0.001, 0.001, 0.0],
         [0.01,  0.005, 0.0],
     ])
-    cells = np.array([2, 0, 1, 2, 1, 2])  # two line cells
+    cells = np.array([2, 0, 1, 2, 1, 2])
     celltypes = np.array([3, 3], dtype=np.uint8)  # VTK_LINE = 3
     grid = pv.UnstructuredGrid(cells, celltypes, pts)
     grid.point_data["Pressure"] = np.array([12345.0, 12000.0, 8000.0])
@@ -108,11 +106,10 @@ def test_stagnation_values_picks_closest_to_origin():
 
 
 def test_stagnation_values_skips_axis_band():
-    # axis node has an inflated value; the y_axis_skip band should exclude it
     surface = {
         "x":  np.array([0.0,    0.0001, 0.001, 0.005]),
         "y":  np.array([0.0,    0.001,  0.002, 0.01]),
-        "p":  np.array([2.0e4,  1.2e4,  1.18e4, 8.0e3]),  # axis inflated
+        "p":  np.array([2.0e4,  1.2e4,  1.18e4, 8.0e3]),  # the axis node is inflated
         "qw": np.array([6.0e6,  1.8e6,  1.5e6,  5.0e5]),
     }
     stag = stagnation_values(surface, y_axis_skip=5e-4, n_average=1)
@@ -129,7 +126,7 @@ def test_stagnation_values_averages_when_requested():
         "qw": np.array([1.8e6,  1.5e6,  1.4e6,  5.0e5]),
     }
     stag = stagnation_values(surface, y_axis_skip=5e-4, n_average=3)
-    # mean of first 3 nodes (sorted by distance from origin)
+    # the three nodes nearest the origin
     assert stag["p"] == pytest.approx(np.mean([1.2e4, 1.18e4, 1.16e4]))
     assert stag["qw"] == pytest.approx(np.mean([1.8e6, 1.5e6, 1.4e6]))
 
@@ -139,9 +136,8 @@ def test_stagnation_values_averages_when_requested():
 # ============================================================================================
 
 def _synthetic_axis(x_shock=-0.005, p_inf=100.0, p_post=1.2e4, n=2000, smooth_width=0.0008):
-    """Construct an axis-line p(x) profile with a smeared shock at x_shock."""
+    """Axis pressure profile with a tanh-smeared shock centered at x_shock."""
     x = np.linspace(-0.04, 0.0, n)
-    # tanh transition centered at x_shock, narrow width
     p = p_inf + 0.5 * (p_post - p_inf) * (1.0 + np.tanh((x - x_shock) / smooth_width))
     return {"x": x, "p": p}
 
@@ -150,21 +146,18 @@ def test_shock_standoff_midpoint_matches_truth():
     truth = -0.005
     axis = _synthetic_axis(x_shock=truth)
     res = find_shock_standoff(axis, p_inf=100.0)
-    # the midpoint pick lands at the center of the smear == truth
     assert res["method"] == "midpoint"
     assert res["x_shock_midpoint"] == pytest.approx(truth, abs=2e-4)
     assert res["x_shock_gradient"] == pytest.approx(truth, abs=1e-4)
 
 
 def test_shock_standoff_threshold_fallback_matches_truth():
-    # threshold pick (first p > 2*p_inf) should land near the leading edge
     truth = -0.005
     axis = _synthetic_axis(x_shock=truth)
     res = find_shock_standoff(axis, p_inf=100.0)
-    # the threshold pick lands on the leading edge of the smear, upstream of
-    # its centre, so the tolerance here matches the smear width
+    # the first p > 2 p_inf is on the upstream edge of the smear, so the tolerance is its width
     assert res["x_shock_threshold"] == pytest.approx(truth, abs=3e-3)
-    assert res["x_shock_threshold"] < truth  # leading edge upstream of center
+    assert res["x_shock_threshold"] < truth
 
 
 def test_extract_training_tensors_from_synthetic_vtu(tmp_path):
@@ -203,8 +196,7 @@ def test_extract_training_tensors_from_synthetic_vtu(tmp_path):
 
 
 def test_shock_standoff_handles_no_shock():
-    # a uniform freestream holds no shock at all. every pick must be rejected
-    # and the standoff must come back as NaN, not as a value near an endpoint.
+    # the failure is a standoff near an endpoint instead of NaN
     x = np.linspace(-0.04, 0.0, 1000)
     p = np.full_like(x, 100.0)
     res = find_shock_standoff({"x": x, "p": p}, p_inf=100.0)
@@ -215,18 +207,11 @@ def test_shock_standoff_handles_no_shock():
 
 
 def test_shock_standoff_collapsed_returns_nan():
-    """A shock within a few cells of the body end of the line must return NaN.
-
-    A sharp cone can stall the sweep this way. The second-order solve settles
-    with the bow shock about one grid cell from the wall, so a shock layer near
-    6000 K sits against a wall at 300 K. Without the guard the threshold pick
-    lands on the second-to-last grid index and the standoff comes back as a
-    finite constant near 3e-4 m, which reads as a measurement and is not one.
-    """
+    """A sharp cone can leave the shock one cell from the wall; that is not a standoff."""
     n = 2000
     x = np.linspace(-0.6, 0.0, n)
     dx = (x[-1] - x[0]) / (n - 1)
-    truth = x[-2]  # one cell from the body endpoint
+    truth = x[-2]
     p = 100.0 + 0.5 * (1.4e4 - 100.0) * (1.0 + np.tanh((x - truth) / (0.5 * dx)))
     res = find_shock_standoff({"x": x, "p": p}, p_inf=100.0, min_cells_from_body=3)
     assert res["method"] == "none"
@@ -236,20 +221,16 @@ def test_shock_standoff_collapsed_returns_nan():
 
 
 def test_shock_standoff_far_upstream_pick_rejected():
-    # a feature that looks like a shock but sits within min_cells of the
-    # freestream end of the line is equally degenerate: no bow shock was found
     n = 2000
     x = np.linspace(-0.6, 0.0, n)
     p = np.full_like(x, 100.0)
-    p[:2] = 1.4e4  # spurious spike at the upstream end
+    p[:2] = 1.4e4
     res = find_shock_standoff({"x": x, "p": p}, p_inf=100.0, min_cells_from_body=3)
     assert res["method"] == "none"
     assert np.isnan(res["standoff"])
 
 
 def test_shock_standoff_valid_pick_marked_valid():
-    # a well-resolved shock far from both ends stays valid and reports the
-    # standoff with the usual sign convention
     axis = _synthetic_axis(x_shock=-0.005)
     res = find_shock_standoff(axis, p_inf=100.0)
     assert res["valid"] is True

@@ -1,30 +1,14 @@
-"""Slice-count ablation tables and the envelope-distance figure.
+"""Slice-count ablation tables and the guard threshold on envelope distance.
 
-The script reads the ``final_eval.json`` and ``per_case_eval.json`` pair that
-``scripts/train.py`` leaves in each run directory, one directory per slice
-count, and writes three things:
-
-1. the ablation table, which holds the mean relative L2 per tier against the
-   slice count M and marks the best M in each column. The best M inside the
-   training box and the best M outside it need not agree.
-2. the tier table for one chosen M, which holds the relative L2 per channel
-   across the interpolation tier, the family holdout, and the extrapolation
-   slabs.
-3. the figure of error against envelope distance, with the guard threshold
-   drawn on it.
-
-Envelope distance measures how far a case falls outside the training box. For
-one parameter with training range [lo, hi] it is
-max(0, (v - hi) / (hi - lo), (lo - v) / (hi - lo)), and the distance of the case
-is the largest of those over its parameters. A case inside the box sits at 0.
-The guard combines that distance with the Knudsen number and flags any input
-past the distance threshold or above a Knudsen number of 0.01, which is where
-the ground truth itself stops being valid.
+Reads ``final_eval.json`` and ``per_case_eval.json`` from one
+``scripts/train.py`` run directory per slice count M. Prints the mean relative
+L2 per tier against M, the error per channel and tier for one M, and the guard
+threshold: the envelope distance where the binned median error passes twice
+that of the cases inside the box.
 
 Usage
 -----
-    python scripts/slice_ablation.py data/processed/ablation/run_m* \
-        --fig-out data/samples/envelope_distance.png
+    python scripts/slice_ablation.py results/slice_ablation/run_m*
 """
 
 from __future__ import annotations
@@ -33,10 +17,6 @@ import argparse
 import json
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 import numpy as np
 
 from src.analytical import knudsen_number
@@ -158,63 +138,34 @@ def tier_table(run: dict) -> str:
 
 
 # ============================================================================================
-#                                       envelope figure
+#                                       guard threshold
 # ============================================================================================
 
-def envelope_figure(run: dict, fig_out: Path, guard_factor: float = 2.0) -> float:
-    """Plot the error of each case against its envelope distance.
+def guard_threshold(run: dict, guard_factor: float = 2.0) -> float:
+    """The smallest envelope distance where the binned median error passes
+    ``guard_factor`` times the median of the cases inside the box.
 
-    Returns the guard threshold, which is the smallest envelope distance where
-    the binned median error passes ``guard_factor`` times the median of the
-    family holdout. The cases at distance 0, inside the box, set that baseline.
+    The binned medians are joined by straight lines, and the threshold is where
+    that line first crosses. Returns nan when it never does.
     """
     rows = per_case_table(run)
-    in_box = [r for r in rows if r["split"] in ("test", "test_interp")]
-    base = float(np.median([r["mean_rL2"] for r in in_box]))
-
-    # medians in bins of distance, which give both the trend line and the
-    # threshold
+    base = float(np.median([r["mean_rL2"] for r in rows if r["split"] in ("test", "test_interp")]))
     out_rows = sorted((r for r in rows if r["dist"] > 0), key=lambda r: r["dist"])
-    guard_dist = None
+    if not out_rows:
+        return float("nan")
     trend_x, trend_y = [0.0], [base]
-    if out_rows:
-        edges = np.quantile([r["dist"] for r in out_rows],
-                            np.linspace(0, 1, min(6, max(2, len(out_rows) // 4 + 1))))
-        for lo, hi in zip(edges[:-1], edges[1:]):
-            binned = [r["mean_rL2"] for r in out_rows if lo <= r["dist"] <= hi]
-            if not binned:
-                continue
+    edges = np.quantile([r["dist"] for r in out_rows],
+                        np.linspace(0, 1, min(6, max(2, len(out_rows) // 4 + 1))))
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        binned = [r["mean_rL2"] for r in out_rows if lo <= r["dist"] <= hi]
+        if binned:
             trend_x.append(float((lo + hi) / 2))
             trend_y.append(float(np.median(binned)))
-        # the guard threshold interpolates the first crossing of the trend line
-        thresh = guard_factor * base
-        for (x0, y0), (x1, y1) in zip(zip(trend_x, trend_y), zip(trend_x[1:], trend_y[1:])):
-            if y0 <= thresh < y1:
-                guard_dist = x0 + (thresh - y0) / (y1 - y0) * (x1 - x0)
-                break
-
-    fig, ax = plt.subplots(figsize=(7, 4.5))
-    groups = sorted({r["split"] for r in rows})
-    for g in groups:
-        pts = [r for r in rows if r["split"] == g]
-        label = tier_label(g)
-        ax.scatter([r["dist"] for r in pts], [r["mean_rL2"] for r in pts],
-                   s=18, alpha=0.7, label=label)
-    ax.plot(trend_x, trend_y, "k--", lw=1, label="binned median")
-    ax.axhline(guard_factor * base, color="gray", lw=0.8, ls=":",
-               label=f"{guard_factor:.0f}x holdout median")
-    if guard_dist is not None:
-        ax.axvline(guard_dist, color="crimson", lw=1.2,
-                   label=f"guard threshold d = {guard_dist:.3f}")
-    ax.set_xlabel("envelope distance (L-inf normalized box exceedance)")
-    ax.set_ylabel("per-case mean rel-L2")
-    ax.set_title(f"Error growth outside the training envelope (M = {run['slice_num']})")
-    ax.legend(fontsize=8)
-    fig.tight_layout()
-    fig_out.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(fig_out, dpi=150)
-    plt.close(fig)
-    return guard_dist if guard_dist is not None else float("nan")
+    thresh = guard_factor * base
+    for (x0, y0), (x1, y1) in zip(zip(trend_x, trend_y), zip(trend_x[1:], trend_y[1:])):
+        if y0 <= thresh < y1:
+            return x0 + (thresh - y0) / (y1 - y0) * (x1 - x0)
+    return float("nan")
 
 
 # ============================================================================================
@@ -224,9 +175,8 @@ def envelope_figure(run: dict, fig_out: Path, guard_factor: float = 2.0) -> floa
 def main() -> None:
     p = argparse.ArgumentParser(description="slice-count ablation + envelope analysis")
     p.add_argument("runs", nargs="+", help="run directories, one per slice count")
-    p.add_argument("--fig-out", default="data/samples/envelope_distance.png")
     p.add_argument("--envelope-m", type=int, default=None,
-                   help="slice count for the tier table and figure; "
+                   help="slice count for the tier table and the guard threshold; "
                         "the default takes the best family holdout")
     p.add_argument("--guard-factor", type=float, default=2.0)
     args = p.parse_args()
@@ -242,9 +192,8 @@ def main() -> None:
     print(f"\n## Tier table (M = {chosen['slice_num']})\n")
     print(tier_table(chosen))
 
-    guard = envelope_figure(chosen, Path(args.fig_out), args.guard_factor)
-    print(f"\nenvelope figure -> {args.fig_out}")
-    print(f"guard threshold: envelope distance {guard:.2f} or Kn > {KN_MAX}")
+    guard = guard_threshold(chosen, args.guard_factor)
+    print(f"\nguard threshold: envelope distance {guard:.3f} or Kn > {KN_MAX}")
 
     kn_near = [r for r in per_case_table(chosen) if r["kn"] > 0.5 * KN_MAX]
     if kn_near:

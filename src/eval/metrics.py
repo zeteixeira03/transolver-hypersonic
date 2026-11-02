@@ -1,10 +1,4 @@
-"""
-How a prediction is scored, and what the evaluation tiers are called.
-
-The score of one case is the relative L2 error per channel, in physical units:
-the norm of the error over all mesh nodes divided by the norm of the true field.
-A number of 0.1 means the predicted field is off by 10% of the field itself.
-"""
+"""Relative L2 scoring in physical units, and the names of the evaluation tiers."""
 
 from __future__ import annotations
 
@@ -21,18 +15,7 @@ TIER_LABELS = {
 
 
 def relative_l2(pred: torch.Tensor, true: torch.Tensor) -> torch.Tensor:
-    """Relative L2 error per channel over the nodes of one case.
-
-    Parameters
-    ----------
-    pred, true : torch.Tensor
-        Fields of shape (N, C) in physical units.
-
-    Returns
-    -------
-    torch.Tensor
-        Shape (C,).
-    """
+    """Relative L2 error per channel, (N, C) fields to shape (C,)."""
     return (pred - true).pow(2).sum(dim=0).sqrt() / true.pow(2).sum(dim=0).sqrt()
 
 
@@ -47,9 +30,6 @@ def tier_label(split: str) -> str:
 
 
 def tiers_present(records: list[dict]) -> list[str]:
-    """Evaluation tiers present in per-case records, in report order.
-
-    The validation split only calibrates thresholds, so it is not a tier.
-    """
+    """Evaluation tiers present in per-case records, in report order, without ``val``."""
     present = {r["split"] for r in records}
     return [s for s in EVAL_SPLITS if s != "val" and s in present]

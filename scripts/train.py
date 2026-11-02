@@ -1,67 +1,12 @@
 """Train Transolver on the SU2 hypersonic dataset.
 
-The slice-count ablation is the single flag ``--slice-num``. Sweep it by
-running again with a new value and a new ``--out``.
-
-Splits
-------
-The training and validation splits come from the ``core`` group alone,
-stratified by ``geom_id``, so a validation case sits on a geometry the model
-never trained on. The four extrapolation slabs, ``cone_high``, ``mach_high``,
-``nose_large`` and ``nose_small``, are held out whole as test sets, and each
-one reports its own metrics.
-
-Three evaluation tiers rise in difficulty. ``test_interp`` is interpolation:
-cases held back from the training geometries, so the shapes are seen and the
-freestream conditions are not. ``test`` is the family holdout: whole geometry
-clusters absent from training. The slabs are extrapolation past the core box.
-
-Deep ensembles
---------------
-``--init-seed`` separates the randomness of training, meaning the starting
-weights, the data order and the node draw, from the randomness of the split.
-Every member of an ensemble shares one ``--seed``, which gives identical splits
-and identical normalization statistics, and differs only in ``--init-seed``. A
-run with no ``--init-seed`` counts as the member at init-seed 0.
-
-Evaluation without training
----------------------------
-``--eval-only RUNDIR`` skips training. It loads ``RUNDIR/best.pt`` and
-``RUNDIR/norm_stats.pt``, rebuilds the splits from the current dataset
-directory, and scores every tier. Use it to re-score existing checkpoints once
-a new dataset version brings new extrapolation cases.
-
-Physics priors
---------------
-The project leaves three priors on. Each one can be switched off, so the prior
-ablation can price it against a baseline on a small training split.
-``--predict-p`` drops the hard equation of state and emits pressure as a free
-fifth channel instead of reconstructing it from density and temperature.
-``--log-targets`` names the channels standardized in log10 space, and ``none``
-applies plain standardization to every channel. ``--qw-head`` adds a case-level stagnation
-heat-flux head, which predicts either log10 of q_w directly or the log of its
-ratio to the Fay-Riddell value. The defaults hold the project convention, so an
-existing command behaves as before.
-
-Metrics
--------
-The primary number is the relative L2 per channel over the held-out set, in
-physical units after the normalization is undone.
-
-Stagnation heat flux is what makes the result credible to an engineer, and two
-different numbers carry that name here. The first runs the finite-difference
-estimator :func:`src.eval.sanity.compute_q_w_from_T` over the predicted field
-and over the true field and compares the two, which isolates the near-wall
-gradient of the surrogate. It runs for every model, so the column stays
-comparable across ablation cells. The second exists only where a heat-flux head
-does, and that head trains and scores against the value SU2 itself reported in
-the ledger.
-
-The two disagree by a median factor of about 27 on this dataset, the
-finite-difference value being the smaller, because a fit to the nearest fluid
-neighbour cannot resolve the near-wall gradient at this mesh resolution. The two
-columns are reported apart and must never be read as one quantity.
-
+Two numbers carry the name stagnation heat flux. One runs the finite-difference
+estimator :func:`src.eval.sanity.compute_q_w_from_T` on the predicted and on the
+true field, for every model. The other comes from the heat-flux head, which
+trains and scores against the value SU2 reported in the ledger. They differ by a
+median factor of about 27, the finite-difference value being smaller, because a
+fit to the nearest fluid neighbour cannot resolve the near-wall gradient at this
+mesh resolution. Never read them as one quantity.
 """
 
 from __future__ import annotations
@@ -109,17 +54,11 @@ ROOT = Path(__file__).resolve().parents[1]
 #                                       physics priors
 # ============================================================================================
 
-# each of the three priors below can be switched off, so the ablation can price
-# it. the defaults hold the project convention: pressure reconstructed and never
-# predicted, log10 normalization on density and temperature, no heat-flux head.
-
 def preflight_device(device: str) -> None:
     """Stop at once on an accelerator the installed torch has no kernels for.
 
-    A rented session assigns a card rather than offering a choice. A card too old
-    for the build otherwise fails as a CUDA error at the first forward pass,
-    which arrives after dataset staging has already spent most of an hour of
-    quota. This check turns that into an immediate and readable failure.
+    Kaggle assigns the card. One too old for the build fails only at the first
+    forward pass, after dataset staging has spent most of an hour of quota.
     """
     if not device.startswith("cuda"):
         return
@@ -142,10 +81,8 @@ def preflight_device(device: str) -> None:
 def collect_env(device: str) -> dict:
     """Record the provenance of one run: code version, interpreter, accelerator.
 
-    A run happens on a rented machine that does not persist, and pushing the
-    notebook again destroys its output. Anything absent from the run directory
-    costs another session of quota to recover. The commit and the device are what
-    make a surprising number explicable months later.
+    The Kaggle session does not persist and pushing the notebook again destroys
+    its output, so the run directory is the only record.
     """
     env = {
         "python": sys.version.split()[0],
@@ -163,7 +100,7 @@ def collect_env(device: str) -> dict:
             stderr=subprocess.DEVNULL,
         ).strip())
     except (subprocess.CalledProcessError, OSError):
-        env["git_commit"] = None          # no git available, or not a checkout
+        env["git_commit"] = None
     if torch.cuda.is_available():
         env["gpu_name"] = torch.cuda.get_device_name(0)
         env["gpu_capability"] = list(torch.cuda.get_device_capability(0))
@@ -177,9 +114,8 @@ class QwSpec:
     """How the stagnation heat-flux head encodes its target.
 
     ``direct`` regresses the standardized ``log10 q_w``. ``residual`` regresses
-    the standardized log of the ratio to the Fay-Riddell value, so the network
-    learns only the departure from the correlation. Both work in log space,
-    because q_w runs from 1.2e4 to 5.8e7 W/m^2 across the dataset.
+    the standardized log10 of its ratio to the Fay-Riddell value. Both work in
+    log space because q_w runs from 1.2e4 to 5.8e7 W/m^2 across the dataset.
 
     Attributes
     ----------
@@ -330,8 +266,7 @@ def main() -> None:
     if not splits["train"]:
         raise SystemExit("empty train split; check ledger / workdir")
 
-    # the training range of each parameter, which the envelope-distance analysis
-    # reads later
+    # read later by the envelope-distance analysis
     case_params = {cid: {k: float(r[k]) for k in CASE_PARAM_ORDER} for cid, r in rows.items()}
     train_ids = [case_id_from_npz_path(p) for p in splits["train"]]
     train_envelope = {
@@ -340,7 +275,6 @@ def main() -> None:
         for k in CASE_PARAM_ORDER
     }
 
-    # ---- prior configuration: target layout, log channels, heat-flux head ----
     target_order = TARGET_ORDER_WITH_P if args.predict_p else TARGET_ORDER
     if args.log_targets is None:
         log_targets = DEFAULT_LOG_TARGETS_WITH_P if args.predict_p else DEFAULT_LOG_TARGETS
@@ -355,8 +289,8 @@ def main() -> None:
     print(f"[priors] targets={list(target_order)} log={list(log_targets)} "
           f"qw_head={args.qw_head}")
 
-    # built on every run, so that every per-case record carries both the ledger
-    # and the analytical heat flux, and not only the runs that train a head
+    # built on every run, so every per-case record carries the ledger and the
+    # Fay-Riddell heat flux
     qw_raw, fr_by_name = build_qw_maps(paths, case_params,
                                        qw_by_id)
     qw_spec: QwSpec | None = None
@@ -367,8 +301,7 @@ def main() -> None:
                 for n in train_names if n in qw_raw]
         if not logs:
             raise SystemExit("--qw-head set but no train case has a ledger q_w")
-        # the floor on the standard deviation guards against a degenerate
-        # training split. a real spread is of order 0.1 to 1.
+        # the floor guards a degenerate split; a real spread is 0.1 to 1
         qw_spec = QwSpec(args.qw_head, float(np.mean(logs)),
                          max(float(np.std(logs)), 1e-6))
         qw_encoded = {n: qw_spec.encode(qw_raw[n], fr_by_name[n]) for n in qw_raw}
@@ -389,8 +322,6 @@ def main() -> None:
                     paths, case_params, qw_by_id)
         else:
             qw_spec = None
-        # the shape of the model must match the checkpoint, so take it from the
-        # arguments the run recorded
         run_args = dict(vars(args))
         prev_eval = rundir / "final_eval.json"
         if prev_eval.is_file():
@@ -407,7 +338,6 @@ def main() -> None:
         model.load_state_dict(torch.load(rundir / "best.pt", map_location=args.device))
         print(f"[eval-only] loaded {rundir / 'best.pt'} "
               f"(slice_num={run_args['slice_num']})")
-        # the layout in the checkpoint outranks the command-line defaults here
         log_targets = stats.log_targets
         n_params = sum(p.numel() for p in model.parameters())
         best_val, best_epoch = None, None
@@ -448,9 +378,8 @@ def main() -> None:
         for epoch in range(1, args.epochs + 1):
             rec = train_one_epoch(model, loader, optimizer, args.device, args.grad_clip,
                                   qw_weight=qw_weight)
-            # record every cheap scalar on every epoch. the run directory is the
-            # only lasting record, and recovering a curve later costs a whole
-            # session of accelerator quota.
+            # every cheap scalar on every epoch: recovering a curve later costs a
+            # session of quota
             rec["epoch"] = epoch
             rec["lr"] = float(optimizer.param_groups[0]["lr"])
             rec["wallclock_s"] = time.time() - t_start
@@ -480,7 +409,6 @@ def main() -> None:
         print(f"[main] best val mean_rL2 {best_val:.4f} at epoch {best_epoch} "
               f"of {args.epochs}")
 
-    # final eval on all tiers from the best checkpoint
     final = {}
     per_case_all: dict[str, list[dict]] = {}
     for split_name in ["val", "test", "test_interp", *(f"ood_{g}" for g in OOD_GROUPS)]:
@@ -492,18 +420,14 @@ def main() -> None:
             qw_ledger_by_name=qw_raw)
         print(f"[final] {split_name}: {final[split_name]}")
 
-    # without training, args.slice_num, n_hidden, n_layers and n_head still hold
-    # the command-line defaults rather than the shape of the model that ran.
-    # overlay them from run_args, so the provenance record matches the checkpoint
-    # that was loaded.
+    # with --eval-only, record the shape of the loaded model, not the defaults
     args_out = dict(vars(args))
     if args.eval_only is not None:
         for k in ("slice_num", "n_hidden", "n_layers", "n_head"):
             args_out[k] = run_args[k]
     (out / "final_eval.json").write_text(json.dumps({
         "splits": {k: len(v) for k, v in splits.items()},
-        # the names as well as the counts. without them a later run on a
-        # refreshed dataset could not be lined up against this one case by case.
+        # names, so a run on a refreshed dataset can be matched case by case
         "split_names": {k: [case_name(p) for p in v] for k, v in splits.items()},
         "args": args_out,
         "env": collect_env(args.device),
