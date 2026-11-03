@@ -419,8 +419,9 @@ scripts/
   run_cases.py             # resumable SU2 job runner with a first-order start and settle rounds
   figures.py               # draws every figure in data/samples from the records
 app/
-  app.py                   # Streamlit dashboard: sliders, verdict, field plot, cross-checks
-  inference.py             # meshing, ensemble prediction and the decision for one query
+  app.py                   # Streamlit dashboard: sliders, verdict, solve time, fields, learned slices
+  inference.py             # meshing, ensemble prediction, the decision and the slice map for one query
+  su2_wall_time.csv        # SU2 wall time of every solved sweep case, for the solve-time comparison
 notebooks/
   01_validate_stack.ipynb  # AirfRANS validation, Kaggle orchestrator
   02_train_su2.ipynb       # SU2 training runs, Kaggle orchestrator

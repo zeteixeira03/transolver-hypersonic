@@ -1,0 +1,22 @@
+[theme]
+headingFontSizes = ["1.875rem", "1.125rem", "1.125rem", "1rem", "1rem", "1rem"]
+
+[theme.light]
+primaryColor = "#1d3a8a"
+backgroundColor = "#f7f8fb"
+secondaryBackgroundColor = "#e9edf5"
+textColor = "#0b1530"
+
+[theme.light.sidebar]
+backgroundColor = "#e9edf5"
+secondaryBackgroundColor = "#dfe5f0"
+
+[theme.dark]
+primaryColor = "#fbbf24"
+backgroundColor = "#0a1020"
+secondaryBackgroundColor = "#101830"
+textColor = "#e6ebf5"
+
+[theme.dark.sidebar]
+backgroundColor = "#101830"
+secondaryBackgroundColor = "#1e2944"

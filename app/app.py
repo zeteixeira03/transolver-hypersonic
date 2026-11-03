@@ -1,9 +1,12 @@
 """Streamlit dashboard for the hypersonic sphere-cone flow surrogate.
 
 One prediction meshes the geometry and runs five Transolver members on the
-processor, so it waits for the run button.
+processor, so it waits for the run button. The first visit runs the default
+condition, so the page opens with a result.
 """
 from __future__ import annotations
+
+import io
 
 import matplotlib
 
@@ -11,8 +14,19 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import streamlit as st
-from inference import R_B_RATIO, R_S_RATIO, load_default_ensemble, predict
-from matplotlib.colors import LogNorm, Normalize
+from inference import (
+    R_B_RATIO,
+    R_S_RATIO,
+    REGIONS,
+    SLICE_HEAD,
+    SLICE_LAYER,
+    load_default_ensemble,
+    normalized_mutual_information,
+    predict,
+    slice_table,
+)
+from matplotlib.colors import ListedColormap, LogNorm, Normalize, TwoSlopeNorm
+from matplotlib.ticker import FuncFormatter, MaxNLocator
 
 from src.data.sampler import FS_BOX, GEOM_BOX, KN_MAX, T_WALL
 from src.eval.plots import decade_ticks, masked_triangulation
@@ -23,23 +37,27 @@ from src.geometry.sphere_cone import body_outline
 #                                       page config
 # ============================================================================================
 
-st.set_page_config(page_title="Hypersonic sphere-cone surrogate", layout="wide")
+st.set_page_config(page_title="Hypersonic re-entry surrogate", layout="wide")
 
+# label, unit, log scale, colour map, symbol on the field selector
 FIELD_META = {
-    "T": ("Temperature", "K", True),
-    "rho": ("Density", "kg/m³", True),
-    "p": ("Pressure", "Pa", True),
-    "u": ("Axial velocity", "m/s", False),
-    "v": ("Radial velocity", "m/s", False),
+    "T": ("temperature", "K", True, "inferno", "T"),
+    "rho": ("density", "kg/m³", True, "viridis", "ρ"),
+    "p": ("pressure", "Pa", True, "plasma", "p"),
+    "u": ("axial velocity", "m/s", False, "cividis", "u"),
+    "v": ("radial velocity", "m/s", False, "RdBu_r", "v"),
 }
-DECISION_STYLE = {
-    "trust": ("Trust", "#1a7f37", "Inputs sit inside the validated envelope and the "
-              "ensemble agrees. Prediction is usable."),
-    "warn": ("Warn", "#9a6700", "Ensemble spread is elevated. Treat the field as "
-             "indicative, not quantitative."),
-    "refuse": ("Refuse", "#cf222e", "Inputs fall outside the validated envelope or the "
-               "ensemble disagrees strongly. Run a full simulation instead."),
-}
+# the colours read on both the light and the dark theme
+VERDICT = {"trust": ("Trust", "usable", "#3d9a63"),
+           "warn": ("Warn", "indicative only", "#c98a1b"),
+           "refuse": ("Refuse", "run a full simulation", "#e5484d")}
+OUT_OF_BOX = "#e5484d"
+TRACK = "rgba(151, 166, 195, 0.25)"
+LINE = "rgba(128, 128, 128, 0.25)"
+INK, MUTED = "#1f2430", "#6b7280"
+REGION_GREYS = ["#d7dce4", "#98a3b6", "#4a5568"]
+SLICE_COLORS = ["#4e79a7", "#f28e2b", "#e15759", "#76b7b2", "#59a14f", "#edc948",
+                "#b07aa1", "#ff9da7", "#9c755f", "#86bcb6"]
 
 ENVELOPE_BOX = {
     "mach": FS_BOX["mach"],
@@ -47,15 +65,46 @@ ENVELOPE_BOX = {
     "R_n_mm": tuple(1000.0 * v for v in GEOM_BOX["R_n"]),
     "theta_c": GEOM_BOX["theta_c"],
 }
+# key, label, slider range, default, step, value format
+SLIDERS = [
+    ("mach", "Mach", 8.0, 30.0, 15.0, 0.5, "%.1f"),
+    ("altitude", "Altitude", 40.0, 70.0, 52.0, 1.0, "%.0f km"),
+    ("R_n_mm", "Nose radius $R_n$", 5.0, 80.0, 25.0, 1.0, "%.0f mm"),
+    ("theta_c", r"Cone half-angle $\theta_c$", 35.0, 80.0, 50.0, 1.0, "%.0f°"),
+]
 
-
-def envelope_note(value: float, lo: float, hi: float, unit: str = "") -> str:
-    """Say whether the value sits inside the training box."""
-    if value < lo:
-        return f":red[outside the training box, below {lo:g}{unit}]"
-    if value > hi:
-        return f":red[outside the training box, above {hi:g}{unit}]"
-    return f"inside the training box ({lo:g} to {hi:g}{unit})"
+CSS = f"""<style>
+h1 {{ padding-bottom: 0.25rem; }}
+.eyebrow {{ font-size: 0.75rem; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.65; }}
+.muted {{ opacity: 0.65; }}
+[data-testid="stSliderTickBar"] {{ display: none; }}
+/* the dark theme's accent is amber, too light for white text */
+@media (prefers-color-scheme: dark) {{ [data-testid="stBaseButton-primary"] p {{ color: #0a1020; }} }}
+.box {{ position: relative; height: 16px; margin-top: -2.3rem; }}
+.box div {{ position: absolute; top: 0; height: 5px; border: 1px solid currentColor; border-top: 0; opacity: 0.5;
+  left: calc(6px + var(--lo) * (100% - 12px)); width: calc((var(--hi) - var(--lo)) * (100% - 12px)); }}
+.box span {{ position: absolute; top: 4px; font-size: 11px; line-height: 1; opacity: 0.6; transform: translateX(-50%);
+  font-variant-numeric: tabular-nums; }}
+.st-key-strip {{ border-top: 1px solid {LINE}; border-bottom: 1px solid {LINE}; padding: 0.5rem 0; }}
+.st-key-strip [data-testid="stColumn"] + [data-testid="stColumn"] {{ border-left: 1px solid {LINE}; padding-left: 1rem; }}
+[data-testid="stMetricValue"] {{ font-size: 1.6rem; }}
+.verdict-k {{ font-size: 0.875rem; }}
+.chip {{ display: inline-flex; align-items: center; gap: 0.5rem; font-size: 1.25rem; font-weight: 700; margin-top: 0.3rem; }}
+.chip i {{ width: 10px; height: 10px; border-radius: 50%; background: currentColor; }}
+.race {{ display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0.6rem 2rem; align-items: center; }}
+.race-rows {{ display: grid; grid-template-columns: 6rem minmax(0, 1fr) 6rem; gap: 0.6rem 0.75rem; align-items: center; }}
+.race-rows .bar {{ height: 12px; border-radius: 3px; background: currentColor; opacity: 0.35; }}
+.race-rows .bar.fast {{ opacity: 1; min-width: 3px; }}
+.race-rows .t {{ font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }}
+.factor {{ text-align: right; }}
+.factor b {{ display: block; font-size: 2.1rem; line-height: 1.1; font-variant-numeric: tabular-nums; }}
+.st-key-field_plate, .st-key-slice_plate {{ background: #ffffff; border: 1px solid {LINE}; border-radius: 8px; padding: 12px; }}
+table.slices {{ width: 100%; border-collapse: collapse; font-size: 0.875rem; }}
+.slices th {{ text-align: left; font-weight: 400; opacity: 0.65; padding: 0 0.5rem 0.4rem 0; border-bottom: 1px solid {LINE}; }}
+.slices td {{ padding: 0.35rem 0.5rem 0.35rem 0; border-bottom: 1px solid {LINE}; font-variant-numeric: tabular-nums; }}
+.slices .r {{ text-align: right; padding-right: 0; }}
+.sw {{ display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -1px; margin-right: 0.5rem; }}
+</style>"""
 
 
 @st.cache_resource
@@ -74,6 +123,8 @@ def cached_predict(R_n_mm: float, theta_c: float, mach: float, altitude: float):
         "coords": pred.coords, "fields": pred.fields, "n_nodes": len(pred.coords),
         "spread": pred.spread, "distance": pred.distance, "kn": pred.kn,
         "decision": pred.decision, "qoi": pred.qoi, "params": pred.params,
+        "mesh_s": pred.mesh_s, "infer_s": pred.infer_s, "slices": pred.slices,
+        "regions": pred.regions, "su2": pred.su2,
     }
 
 
@@ -81,138 +132,241 @@ def cached_predict(R_n_mm: float, theta_c: float, mach: float, altitude: float):
 #                                       plotting
 # ============================================================================================
 
+def bare_axes(ax: plt.Axes) -> None:
+    ax.axhline(0, color="white", lw=1.0, zorder=4)
+    ax.set_aspect("equal")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    for s in ax.spines.values():
+        s.set_visible(False)
+
+
 def field_figure(coords: np.ndarray, values: np.ndarray, name: str,
                  params: dict[str, float]) -> plt.Figure:
-    label, unit, log = FIELD_META[name]
-    R_b = params["R_b"]
-    x, r = coords[:, 0], coords[:, 1]
-    xx = np.concatenate([x, x])
-    rr = np.concatenate([r, -r])
-    vv = np.concatenate([values, values])
-    outline = body_outline(params["R_n"], params["theta_c_deg"], R_b, params["R_s"])
-    tri = masked_triangulation(xx, rr, outline)
-
-    fig, ax = plt.subplots(figsize=(4.4, 5.0))
-    vmin = float(np.nanmin(values))
-    vmax = float(np.nanmax(values))
+    """The field above the axis and its mirror image below, in millimetres."""
+    label, unit, log, cmap, _ = FIELD_META[name]
+    x, r = coords[:, 0] * 1e3, coords[:, 1] * 1e3
+    outline = body_outline(params["R_n"], params["theta_c_deg"], params["R_b"], params["R_s"]) * 1e3
+    # in the mirror image the radial component points the other way
+    mirrored = -values if name == "v" else values
     if log:
-        vmin = max(vmin, vmax * 1e-4)
-        norm = LogNorm(vmin=vmin, vmax=vmax)
-        levels = np.geomspace(vmin, vmax, 60)
+        hi = float(values.max())
+        norm = LogNorm(max(float(values.min()), hi * 1e-4), hi)
+        levels = np.geomspace(norm.vmin, norm.vmax, 64)
+    elif name == "v":
+        # radial velocity changes sign across the axis, so zero sits in the middle of the map
+        m = float(np.abs(values).max())
+        norm = TwoSlopeNorm(0.0, -m, m)
+        levels = np.linspace(-m, m, 64)
     else:
-        norm = Normalize(vmin=vmin, vmax=vmax)
-        levels = np.linspace(vmin, vmax, 60)
-    cf = ax.tricontourf(tri, np.clip(vv, vmin, vmax), levels=levels, norm=norm, cmap="inferno")
-    cb = fig.colorbar(cf, ax=ax, shrink=0.9)
-    cb.set_label(f"{label} [{unit}]")
+        norm = Normalize(float(values.min()), float(values.max()))
+        levels = np.linspace(norm.vmin, norm.vmax, 64)
+    kw = dict(levels=levels, norm=norm, cmap=cmap, extend="both")
+
+    fig, ax = plt.subplots(figsize=(4.4, 5.6))
+    cf = ax.tricontourf(masked_triangulation(x, r, outline),
+                        np.clip(values, levels[0], levels[-1]), **kw)
+    ax.tricontourf(masked_triangulation(x, -r, outline),
+                   np.clip(mirrored, levels[0], levels[-1]), **kw)
+    ax.fill(outline[:, 0], outline[:, 1], color="#d1d5db", zorder=3)
+    bare_axes(ax)
+    R_b, x_base = params["R_b"] * 1e3, float(x.max())
+    ax.set_xlim(x_base - 1.25 * R_b, x_base + 0.02 * R_b)
+    ax.set_ylim(-1.25 * R_b, 1.25 * R_b)
+    cb = fig.colorbar(cf, ax=ax, orientation="horizontal", pad=0.04, fraction=0.05)
     if log:
         decade_ticks(cb)
-    ax.fill(outline[:, 0], outline[:, 1], color="#d1d5db")
-    ax.set_aspect("equal")
-    # the domain reaches about 8 R_b into the far field; x_base is the
-    # downstream end of the mesh
-    x_base = float(x.max())
-    ax.set_xlim(x_base - 1.15 * R_b, x_base + 0.05 * R_b)
-    ax.set_ylim(-1.2 * R_b, 1.2 * R_b)
-    ax.set_xlabel("x [m]")
-    ax.set_ylabel("r [m]")
-    ax.set_title(f"{label} (ensemble mean)")
-    fig.tight_layout()
+    else:
+        ticks = MaxNLocator(5).tick_values(levels[0], levels[-1])
+        cb.set_ticks([t for t in ticks if levels[0] <= t <= levels[-1]])
+        cb.formatter = FuncFormatter(lambda v, _: f"{v:g}")
+    cb.set_label(f"{label} [{unit}]", color=INK)
+    cb.ax.tick_params(colors=MUTED)
+    cb.outline.set_edgecolor(MUTED)
     return fig
+
+
+def slice_figure(coords: np.ndarray, slices: np.ndarray, regions: np.ndarray,
+                 table: list[dict], params: dict[str, float]) -> plt.Figure:
+    """Strongest slice per node above the axis, flow regions below, zoomed on the nose."""
+    colour_of = {row["slice"]: i for i, row in enumerate(table)}
+    idx = np.array([colour_of.get(m, -1) for m in slices], dtype=float)
+    x, r = coords[:, 0] * 1e3, coords[:, 1] * 1e3
+    outline = body_outline(params["R_n"], params["theta_c_deg"], params["R_b"], params["R_s"]) * 1e3
+    cmap = ListedColormap(SLICE_COLORS[:len(table)])
+    cmap.set_under("#c7cbd1")
+
+    fig, ax = plt.subplots(figsize=(4.4, 5.4))
+    ax.tripcolor(masked_triangulation(x, r, outline), idx, cmap=cmap, vmin=0, vmax=len(table) - 1e-9)
+    ax.tripcolor(masked_triangulation(x, -r, outline), regions.astype(float),
+                 cmap=ListedColormap(REGION_GREYS), vmin=0, vmax=len(REGIONS) - 1e-9)
+    ax.fill(outline[:, 0], outline[:, 1], facecolor="#eef0f3", edgecolor=MUTED, lw=0.8, zorder=3)
+    bare_axes(ax)
+    # the shock layer and the wall layer are thin, so the view stays on the nose
+    nose, rn = outline[:, 0].min(), params["R_n"] * 1e3
+    ax.set_xlim(nose - 0.4 * rn, nose + 2.2 * rn)
+    ax.set_ylim(-1.6 * rn, 1.6 * rn)
+    tag = dict(transform=ax.transAxes, fontsize=9, color=INK,
+               bbox=dict(facecolor="white", edgecolor="none", alpha=0.85, pad=2))
+    ax.text(0.03, 0.97, "slices", va="top", **tag)
+    ax.text(0.03, 0.03, "flow regions", va="bottom", **tag)
+    return fig
+
+
+def png(fig: plt.Figure) -> bytes:
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=160, bbox_inches="tight")
+    plt.close(fig)
+    return buf.getvalue()
+
+
+# a figure takes seconds to triangulate and draw, so each one is drawn once per query
+@st.cache_data(show_spinner=False)
+def field_png(query: tuple[float, float, float, float], name: str) -> bytes:
+    pred = cached_predict(*query)
+    return png(field_figure(pred["coords"], pred["fields"][name], name, pred["params"]))
+
+
+@st.cache_data(show_spinner=False)
+def slice_png(query: tuple[float, float, float, float]) -> bytes:
+    pred = cached_predict(*query)
+    table = slice_table(pred["slices"], pred["regions"])
+    return png(slice_figure(pred["coords"], pred["slices"], pred["regions"], table, pred["params"]))
 
 
 # ============================================================================================
 #                                       sidebar controls
 # ============================================================================================
 
-st.sidebar.title("Flight condition")
-st.sidebar.caption("The sliders reach past the training box, so you can see how "
-                   "the surrogate behaves outside it.")
+st.markdown(CSS, unsafe_allow_html=True)
+st.sidebar.markdown('<div class="eyebrow">Flight condition</div>', unsafe_allow_html=True)
 
-mach = st.sidebar.slider("Mach number", 8.0, 30.0, 15.0, 0.5)
-st.sidebar.caption(envelope_note(mach, *ENVELOPE_BOX["mach"]))
-altitude = st.sidebar.slider("Altitude [km]", 40.0, 70.0, 52.0, 1.0)
-st.sidebar.caption(envelope_note(altitude, *ENVELOPE_BOX["altitude"], unit=" km"))
-R_n_mm = st.sidebar.slider("Nose radius R_n [mm]", 5.0, 80.0, 25.0, 1.0)
-st.sidebar.caption(envelope_note(R_n_mm, *ENVELOPE_BOX["R_n_mm"], unit=" mm"))
-theta_c = st.sidebar.slider("Cone half-angle θ_c [deg]", 35.0, 80.0, 50.0, 1.0)
-st.sidebar.caption(envelope_note(theta_c, *ENVELOPE_BOX["theta_c"], unit="°"))
+values = {}
+for key, label, lo, hi, default, step, fmt in SLIDERS:
+    v = st.sidebar.slider(label, lo, hi, default, step, format=fmt, key=f"sl_{key}")
+    values[key] = v
+    box_lo, box_hi = ENVELOPE_BOX[key]
+    a, b = (box_lo - lo) / (hi - lo), (box_hi - lo) / (hi - lo)
+    st.sidebar.markdown(
+        f'<div class="box" style="--lo:{a};--hi:{b}" title="training box"><div></div>'
+        f'<span style="left:calc(6px + {a} * (100% - 12px))">{box_lo:g}</span>'
+        f'<span style="left:calc(6px + {b} * (100% - 12px))">{box_hi:g}</span></div>',
+        unsafe_allow_html=True)
+    if v < box_lo or v > box_hi:
+        p = 100 * (v - lo) / (hi - lo)
+        # the thumb is the track's only child positioned by a translate
+        track = f".st-key-sl_{key} [data-testid='stSlider'] > div > div > div"
+        st.markdown(
+            f"<style>{track}[style*='translate'] {{ background-color: {OUT_OF_BOX} !important; }}"
+            f".st-key-sl_{key} [data-testid='stSliderThumbValue'] {{ color: {OUT_OF_BOX} !important; }}"
+            f"{track}:not([style*='translate']):not([data-testid]) {{ "
+            f"background-image: linear-gradient(to right, {OUT_OF_BOX} 0%, {OUT_OF_BOX} {p}%, "
+            f"{TRACK} {p}%, {TRACK} 100%) !important; }}</style>",
+            unsafe_allow_html=True)
 
-outside = [n for n, v, k in (("Mach", mach, "mach"), ("altitude", altitude, "altitude"),
-                          ("R_n", R_n_mm, "R_n_mm"), ("θ_c", theta_c, "theta_c"))
-        if v < ENVELOPE_BOX[k][0] or v > ENVELOPE_BOX[k][1]]
-if outside:
-    st.sidebar.warning(f"Outside the training box: {', '.join(outside)}. Expect a warn "
-                       f"or refuse verdict.")
-
-st.sidebar.markdown("---")
-st.sidebar.caption(
-    f"Fixed: base radius R_b = {R_B_RATIO:g}·R_n, shoulder R_s = {R_S_RATIO:g}·R_b, "
-    f"cold wall T_w = {T_WALL:g} K."
-)
-run = st.sidebar.button("Run prediction", type="primary", use_container_width=True)
+st.sidebar.caption(rf"$R_b = {R_B_RATIO:g}\,R_n$, $R_s = {R_S_RATIO:g}\,R_b$, $T_w = {T_WALL:g}$ K")
+run = st.sidebar.button("Run prediction", type="primary", width="stretch")
 
 
 # ============================================================================================
 #                                       main panel
 # ============================================================================================
 
-st.title("Hypersonic sphere-cone flow surrogate")
+st.title("Neural surrogate for hypersonic atmospheric re-entry")
 st.markdown(
-    "A Transolver deep ensemble predicts the steady laminar flow field around an "
-    "axisymmetric re-entry capsule, trained on SU2 axisymmetric Navier-Stokes ground "
-    "truth. Move the sliders, run a prediction, and read the uncertainty verdict. "
-    "One prediction meshes the body and runs five members on the processor."
+    "An attention-based neural surrogate (Transolver) that predicts the steady laminar air flow "
+    "around an axisymmetric re-entry capsule. It was trained on SU2 Navier-Stokes simulation data.\n\n"
+    "Move the sliders on the left of your screen and watch how long it takes to predict a simulation result."
 )
 
-if run:
+if run or "query" not in st.session_state:
     with st.spinner("Meshing the geometry and running the five-member ensemble..."):
-        st.session_state["pred"] = cached_predict(round(R_n_mm, 1), round(theta_c, 1),
-                                                   round(mach, 1), round(altitude, 1))
+        query = (round(values["R_n_mm"], 1), round(values["theta_c"], 1),
+                 round(values["mach"], 1), round(values["altitude"], 1))
+        cached_predict(*query)
+        st.session_state["query"] = query
+query = st.session_state["query"]
+pred = cached_predict(*query)
 
-pred = st.session_state.get("pred")
-if pred is None:
-    st.info("Set a flight condition in the sidebar and press **Run prediction**.")
-    st.stop()
+label, note, color = VERDICT[pred["decision"]]
+with st.container(key="strip"):
+    c0, c1, c2, c3 = st.columns(4)
+    c0.markdown(f'<div class="verdict-k">Verdict</div><div class="chip" style="color:{color}"><i></i>{label}</div>'
+                f'<div class="muted" style="font-size:0.875rem">{note}</div>', unsafe_allow_html=True)
+    c1.metric("Envelope distance", f"{pred['distance']:.3f}", help=(
+        "largest excess of any input over the range the training cases span, as a fraction of "
+        f"that range; refuse above {GUARD_DIST}"))
+    c2.metric("Knudsen number", f"{pred['kn']:.4f}", help=f"the continuum equations stop applying above {KN_MAX}")
+    c3.metric("Ensemble spread", f"{pred['spread']:.3f}", help=f"warn at {get_ensemble()[1]['warn']:.3f}")
 
-label, color, blurb = DECISION_STYLE[pred["decision"]]
+st.subheader("Solve time")
+su2 = pred["su2"]
+fast, slow = pred["mesh_s"] + pred["infer_s"], su2["hours"] * 3600.0
+hours, minutes = divmod(round(su2["hours"] * 60), 60)
 st.markdown(
-    f"<div style='padding:0.8rem 1rem;border-radius:0.5rem;background:{color}22;"
-    f"border-left:6px solid {color};'>"
-    f"<span style='font-size:1.3rem;font-weight:700;color:{color}'>{label}</span>"
-    f"<br><span style='color:inherit'>{blurb}</span></div>",
-    unsafe_allow_html=True,
-)
+    f'<div class="race"><div class="race-rows">'
+    f'<span>Surrogate</span><div><div class="bar fast" style="width:{100 * fast / slow:.3f}%"></div></div>'
+    f'<span class="t">{fast:.1f} s</span>'
+    f'<span>SU2</span><div><div class="bar"></div></div><span class="t">{hours} h {minutes:02d} min</span>'
+    f'</div><div class="factor"><b>{round(slow / fast, -1):,.0f}×</b><span class="muted">faster</span></div></div>',
+    unsafe_allow_html=True)
+meshing = f", including {pred['mesh_s']:.0f} s of meshing" if pred["mesh_s"] >= 1 else ""
+st.caption(
+    f"Surrogate: five members on {pred['n_nodes']:,} nodes, on the processor{meshing}. "
+    f"SU2: nearest solved case (Mach {su2['mach']:.1f}, $R_n$ {1e3 * su2['R_n']:.0f} mm, "
+    rf"$\theta_c$ {su2['theta_c']:.0f}°), one solver process; median {su2['median_hours']:.1f} h "
+    f"over all {su2['n_cases']} sweep cases.")
 
-g1, g2, g3, g4 = st.columns(4)
-g1.metric("Envelope distance", f"{pred['distance']:.3f}", help=(
-    "largest excess of any input over the range the training cases span, as a fraction of "
-    f"that range; refuse above {GUARD_DIST}. The training cases do not reach every edge of "
-    "the training box, so a value near the edge can be refused"))
-g2.metric("Knudsen number", f"{pred['kn']:.4f}", help=f"the continuum equations stop applying above {KN_MAX}")
-g3.metric("Ensemble spread", f"{pred['spread']:.3f}", help=f"warn at {get_ensemble()[1]['warn']:.3f}")
-g4.metric("Mesh nodes", f"{pred['n_nodes']:,}")
-
-st.markdown("---")
 left, right = st.columns([3, 2], gap="large")
-
 with left:
-    st.subheader("Flow field")
-    field = st.selectbox("Field", list(FIELD_META.keys()),
-                         format_func=lambda k: f"{FIELD_META[k][0]} ({k})")
-    st.pyplot(field_figure(pred["coords"], pred["fields"][field], field, pred["params"]))
+    head, pick = st.columns([1, 1], vertical_alignment="center")
+    head.subheader("Field predictions")
+    field = pick.segmented_control("Field", list(FIELD_META), default="T", label_visibility="collapsed",
+                                   format_func=lambda k: FIELD_META[k][4]) or "T"
+    with st.container(key="field_plate"):
+        st.image(field_png(query, field), width="stretch")
 
 with right:
     st.subheader("Quantities of interest")
     so = pred["qoi"]["standoff"]
-    st.metric("Shock standoff (predicted)", f"{so['mean']*1e3:.2f} mm",
-              delta=f"± {so['std']*1e3:.2f} mm ensemble band", delta_color="off")
-    st.caption(f"Billig correlation reference: {so['reference']*1e3:.2f} mm "
-               f"(the correlation holds to about 20% on a spherical nose).")
-
+    st.metric("Shock standoff", f"{so['mean'] * 1e3:.2f} ± {so['std'] * 1e3:.2f} mm")
+    st.caption(f"Billig {so['reference'] * 1e3:.2f} mm")
     qw = pred["qoi"]["q_w"]
-    st.metric("Stagnation heat flux (Fay-Riddell)", f"{qw['reference']/1e6:.2f} MW/m²")
-    st.caption("Analytical value for a cold wall. The surrogate does not resolve the thin "
-               "near-wall thermal gradient, so its direct heat-flux estimate is "
-               "unreliable and is not shown.")
+    st.metric("Stagnation heat flux", f"{qw['reference'] / 1e6:.2f} MW/m²",
+              help="analytical value; the surrogate does not resolve the near-wall thermal gradient")
+    st.caption("Fay-Riddell, cold wall")
 
+table = slice_table(pred["slices"], pred["regions"])
+ens = get_ensemble()[0]
+model = ens.models[0]
+n_slices = model.blocks[SLICE_LAYER].attn.in_project_slice.out_features
+left, right = st.columns([3, 2], gap="large")
+with left:
+    st.subheader("Learned slices")
+    agreement = normalized_mutual_information(pred["regions"], pred["slices"])
+    st.caption(f"layer {SLICE_LAYER + 1}/{len(model.blocks)} · head {SLICE_HEAD + 1}/"
+               f"{model.blocks[SLICE_LAYER].attn.heads} · member 1/{len(ens.models)} · "
+               f"agreement with the flow regions {agreement:.2f}")
+    with st.container(key="slice_plate"):
+        st.image(slice_png(query), width="stretch")
+
+with right:
+    st.caption(
+        f"Transolver assigns every mesh node softly to {n_slices} slices and lets the slices, not the "
+        f"{pred['n_nodes']:,} nodes, attend to each other. Above the axis each node takes the colour of "
+        "its strongest slice; below it, the flow region it falls in. Agreement is the normalized mutual "
+        "information of the two maps: 1 is a perfect match.")
+    rows = "".join(
+        f'<tr><td><span class="sw" style="background:{SLICE_COLORS[i]}"></span>{row["slice"] + 1}</td>'
+        f'<td>{row["region"]}</td><td class="r">{row["share"]:.0%}</td><td class="r">{row["match"]:.0%}</td></tr>'
+        for i, row in enumerate(table))
+    regions = " ".join(f'<span class="sw" style="background:{c}"></span>{n}&emsp;'
+                       for n, c in zip(REGIONS, REGION_GREYS))
+    st.markdown(
+        '<table class="slices"><thead><tr><th>Slice</th><th>Region</th><th class="r">Nodes</th>'
+        f'<th class="r">Match</th></tr></thead><tbody>{rows}</tbody></table>', unsafe_allow_html=True)
+    st.caption(
+        f"Other slices: {1 - sum(row['share'] for row in table):.0%} of nodes, drawn grey. Match is the share "
+        "of a slice's nodes inside the region named. Freestream is below 1.5 times the freestream "
+        "temperature, near wall within 0.1 $R_n$ of the body, shock layer the rest.")
+    st.markdown(f'<div style="font-size:0.875rem">{regions}</div>', unsafe_allow_html=True)

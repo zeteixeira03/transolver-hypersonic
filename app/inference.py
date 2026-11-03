@@ -6,12 +6,16 @@ data, runs every ensemble member on the mesh nodes, and returns the mean fields,
 the spread, the shock standoff with its band across members, and the decision to
 trust, warn or refuse. Meshing takes most of the time, so the geometry is
 meshed once per cone half-angle and scaled to each nose radius.
+
+It also times the prediction against the SU2 wall time of the nearest solved
+case, and records which learned slice each node belongs to most strongly.
 """
 
 from __future__ import annotations
 
 import functools
 import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -28,9 +32,17 @@ from src.eval.uncertainty import (
     predict_on_nodes,
     spread,
 )
-from src.geometry.sphere_cone import mesh_nodes
+from src.geometry.sphere_cone import body_outline, mesh_nodes
 
 ENSEMBLE_DIR = Path(__file__).resolve().parents[1] / "data/processed/ensemble_v3"
+SU2_TIMES = Path(__file__).with_name("su2_wall_time.csv")
+
+# the head whose strongest slices agree best with the flow regions, out of 4 layers
+# times 8 heads of member 1: normalized mutual information 0.59 at Mach 15, 52 km,
+# R_n 25 mm, theta_c 50 deg
+SLICE_LAYER = 1
+SLICE_HEAD = 0
+REGIONS = ("freestream", "shock layer", "near wall")
 
 # controls without a slider sit near the middle of the training box
 R_B_RATIO = 3.0     # R_b / R_n
@@ -83,6 +95,74 @@ def shock_standoff(coords: np.ndarray, rho: np.ndarray, R_n: float, rho_inf: flo
     return float(x_nose - (centers[i - 1] + frac * (centers[i] - centers[i - 1])))
 
 
+def wall_distance(coords: np.ndarray, outline: np.ndarray, chunk: int = 8192) -> np.ndarray:
+    """Distance from each node to the nearest segment of the closed body outline."""
+    a, b = outline, np.roll(outline, -1, axis=0)
+    ab = b - a
+    ab2 = (ab ** 2).sum(1)
+    out = np.empty(len(coords))
+    for i in range(0, len(coords), chunk):
+        ap = coords[i:i + chunk, None, :] - a[None]
+        t = np.clip((ap * ab).sum(-1) / ab2, 0.0, 1.0)
+        out[i:i + chunk] = np.sqrt(((ap - t[..., None] * ab) ** 2).sum(-1)).min(1)
+    return out
+
+
+def flow_regions(coords: np.ndarray, T: np.ndarray, params: dict[str, float]) -> np.ndarray:
+    """Index into ``REGIONS`` per node.
+
+    Freestream has not been heated by the shock (below 1.5 T_inf). Near wall lies
+    within 0.1 R_n of the body. The shock layer is the rest.
+    """
+    outline = body_outline(params["R_n"], params["theta_c_deg"], params["R_b"], params["R_s"])
+    near = wall_distance(coords, outline) < 0.1 * params["R_n"]
+    return np.where(T < 1.5 * params["T_inf"], 0, np.where(near, 2, 1))
+
+
+def normalized_mutual_information(a: np.ndarray, b: np.ndarray) -> float:
+    """Mutual information of two labelings over the mean of their entropies: 1 for a perfect match."""
+    joint = np.zeros((a.max() + 1, b.max() + 1))
+    np.add.at(joint, (a, b), 1.0 / len(a))
+    pa, pb = joint.sum(1), joint.sum(0)
+    nz = joint > 0
+    mi = (joint[nz] * np.log(joint[nz] / np.outer(pa, pb)[nz])).sum()
+    entropy = [-(p[p > 0] * np.log(p[p > 0])).sum() for p in (pa, pb)]
+    return float(mi / np.mean(entropy))
+
+
+def slice_table(slices: np.ndarray, regions: np.ndarray, n_rows: int = 10) -> list[dict]:
+    """The largest slices holding at least 1% of the nodes, each with the region most of its nodes fall in."""
+    rows = []
+    ids, counts = np.unique(slices, return_counts=True)
+    for m, n in zip(ids, counts):
+        if n < 0.01 * len(slices):
+            continue
+        in_region = np.bincount(regions[slices == m], minlength=len(REGIONS))
+        k = int(in_region.argmax())
+        rows.append({"slice": int(m), "share": n / len(slices), "region": REGIONS[k],
+                     "match": in_region[k] / n})
+    return sorted(rows, key=lambda row: -row["share"])[:n_rows]
+
+
+@functools.cache
+def su2_wall_times() -> np.ndarray:
+    """(R_n, theta_c, Mach, p_inf, hours) of every finished sweep case."""
+    return np.loadtxt(SU2_TIMES, delimiter=",")
+
+
+def nearest_su2_case(params: dict[str, float]) -> dict[str, float]:
+    """Wall time of the solved case nearest in nose radius, cone angle, Mach and log pressure."""
+    rows = su2_wall_times()
+    feat = np.c_[rows[:, :3], np.log(rows[:, 3])]
+    lo, hi = feat.min(0), feat.max(0)
+    q = np.array([params["R_n"], params["theta_c_deg"], params["mach"], np.log(params["p_inf"])])
+    i = int(np.argmin((((feat - q) / (hi - lo)) ** 2).sum(1)))
+    hours = rows[:, 4]
+    return {"hours": float(hours[i]), "R_n": float(rows[i, 0]), "theta_c": float(rows[i, 1]),
+            "mach": float(rows[i, 2]), "n_cases": len(rows), "median_hours": float(np.median(hours)),
+            "p5_hours": float(np.percentile(hours, 5)), "p95_hours": float(np.percentile(hours, 95))}
+
+
 @dataclass
 class Prediction:
     coords: np.ndarray                 # (N, 2) node coordinates (x, r)
@@ -93,6 +173,11 @@ class Prediction:
     decision: str                      # trust, warn or refuse
     qoi: dict[str, dict[str, float]]   # standoff and heat flux, with references
     params: dict[str, float]
+    mesh_s: float                      # meshing time, zero when the template mesh was cached
+    infer_s: float                     # time to run the five members and reduce their output
+    slices: np.ndarray                 # (N,) strongest slice of SLICE_HEAD in SLICE_LAYER, member 1
+    regions: np.ndarray                # (N,) index into REGIONS
+    su2: dict[str, float]              # nearest solved case and the sweep's wall-time spread
 
 
 @functools.cache
@@ -106,11 +191,28 @@ def predict(ens: Ensemble, thresholds: dict[str, float], R_n: float, theta_c_deg
             mach: float, altitude_km: float, device: str = "cpu") -> Prediction:
     """Mesh the geometry, run the ensemble, and decide whether to trust the result."""
     params = case_params(R_n, theta_c_deg, R_B_RATIO, R_S_RATIO, mach, altitude_km)
+    t0 = time.perf_counter()
     if R_n < SCALE_FROM:
         coords = mesh_nodes(R_n, theta_c_deg, params["R_b"], params["R_s"])
     else:
         coords = template_nodes(theta_c_deg) * (R_n / SCALE_FROM)
-    members = predict_on_nodes(ens, coords, params, device)      # (K, N, 4)
+    mesh_s = time.perf_counter() - t0
+
+    captured = []
+
+    def strongest_slice(attn, inp, _out):
+        # softmax and the positive temperature keep the order, so the strongest
+        # slice is the largest logit
+        x = inp[0]
+        x_mid = attn.in_project_x(x).reshape(*x.shape[:2], attn.heads, attn.dim_head)[:, :, SLICE_HEAD]
+        captured.append(attn.in_project_slice(x_mid)[0].argmax(-1).cpu().numpy())
+
+    t0 = time.perf_counter()
+    hook = ens.models[0].blocks[SLICE_LAYER].attn.register_forward_hook(strongest_slice)
+    try:
+        members = predict_on_nodes(ens, coords, params, device)  # (K, N, 4)
+    finally:
+        hook.remove()
     mean = members.mean(dim=0)
     fields = {c: mean[:, j].cpu().numpy() for j, c in enumerate(TARGET_ORDER)}
     fields["p"] = reconstruct_pressure(mean[:, 0], mean[:, 3]).cpu().numpy()
@@ -127,6 +229,9 @@ def predict(ens: Ensemble, thresholds: dict[str, float], R_n: float, theta_c_deg
                      "reference": billig_standoff(mach, R_n)},
         "q_w": {"reference": fay_riddell_qw(mach, params["T_inf"], params["p_inf"], R_n, T_WALL)},
     }
+    infer_s = time.perf_counter() - t0
     return Prediction(coords=coords, fields=fields, spread=mean_spread, distance=distance,
                       kn=kn, decision=decide(distance, kn, mean_spread, thresholds),
-                      qoi=qoi, params=params)
+                      qoi=qoi, params=params, mesh_s=mesh_s, infer_s=infer_s,
+                      slices=captured[0], regions=flow_regions(coords, fields["T"], params),
+                      su2=nearest_su2_case(params))
